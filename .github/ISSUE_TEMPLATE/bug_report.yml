@@ -1,0 +1,92 @@
+name: Bug report
+description: Something renders wrong, crashes, or behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a report. Almost every gradio-6 issue fixed in this fork
+        was found from a **screenshot + a console traceback**, so please include both
+        when they apply — it's by far the fastest path to a fix.
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and didn't find a duplicate
+          required: true
+        - label: I'm on the latest `main` (or I've noted my commit below)
+          required: false
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What went wrong, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Switch to XL mode
+        2. Enable hires fix
+        3. Generate — ...
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Console output / traceback
+      description: Paste the terminal output. It will be formatted as code automatically.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag an image in if the problem is visual (a broken control, wrong layout, etc.).
+    validations:
+      required: false
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - "sd"
+        - "xl"
+        - "flux"
+        - "not mode-specific / don't know"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - "Windows 10/11"
+        - "Linux x86_64"
+        - "macOS"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and VRAM
+      placeholder: "e.g. RTX 2080 Ti, 11 GB"
+    validations:
+      required: false
+  - type: input
+    id: commit
+    attributes:
+      label: Commit / release
+      placeholder: "e.g. v1.0, or the short commit hash"
+    validations:
+      required: false
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      placeholder: "e.g. Chrome 141, Firefox 140"
+    validations:
+      required: false
