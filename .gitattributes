@@ -1,0 +1,8 @@
+# batch files MUST be CRLF (cmd.exe misparses LF-only: goto/labels break);
+# shell scripts MUST be LF (bash rejects CRLF). Pin them regardless of platform.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh  text eol=lf
+
+# bundled llama-server (patched build with /sleep + /wake) — binary, never text-convert
+forge-llm/** binary

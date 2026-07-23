@@ -1,0 +1,118 @@
+huggingface_space_mirror/
+random_test.py
+__pycache__
+*.ckpt
+*.safetensors
+*.pth
+*.dev.js
+*_s.py
+*_u.py
+*_m.py
+*_i.py
+.DS_Store
+/output/
+/outputs/
+/ESRGAN/*
+/SwinIR/*
+/repositories
+/venv
+/tmp
+/output
+/model.ckpt
+/models/**/*
+/GFPGANv1.3.pth
+/gfpgan/weights/*.pth
+/ui-config.json
+/outputs
+/config.json
+/log
+/webui.settings.bat
+/embeddings
+/styles.csv
+/params.txt
+/styles.csv.bak
+/webui-user.bat
+/webui-user.sh
+/interrogate
+/user.css
+/.idea
+notification.mp3
+/SwinIR
+/textual_inversion
+.vscode
+# user extensions are folded into this repo as included components (2026-07-22):
+#   sd-webui-replacer       (was light-and-ray/sd-webui-replacer @ 91c075f = upstream head)
+#   sd-webui-segment-anything (was continue-revolution/... @ 982138c = upstream head, + transformers-5 fix)
+#   forge-ai-assistant      (this fork's own extension, code only)
+# anything else dropped into extensions/ stays untracked
+/extensions/*
+!/extensions/put extensions here.txt
+!/extensions/sd-webui-replacer/
+!/extensions/sd-webui-segment-anything/
+!/extensions/forge-ai-assistant/
+
+# assistant runtime state + secrets never enter git (the *.pth rule above keeps
+# segment-anything's SAM/GroundingDINO model weights out too)
+/extensions/forge-ai-assistant/chat_log.jsonl
+/extensions/forge-ai-assistant/ai_memory.json
+/extensions/forge-ai-assistant/last_session.json
+/extensions/forge-ai-assistant/bot_state.json
+/extensions/forge-ai-assistant/ui_profiles.json
+/extensions/forge-ai-assistant/live_guidance.txt
+/extensions/forge-ai-assistant/takeover_active
+/extensions/forge-ai-assistant/anthropic_key.txt
+/extensions/forge-ai-assistant/bridge/
+/extensions/forge-ai-assistant/kvcache/
+/test/stdout.txt
+/test/stderr.txt
+/cache.json*
+/config_states/
+/node_modules
+/package-lock.json
+/.coverage*
+/test/test_outputs
+/cache
+trace.json
+/sysinfo-????-??-??-??-??.json
+/test/results.xml
+coverage.xml
+**/tests/**/expectations
+
+# bundled portable Node runtime for gradio 6 SSR (like venv, not source)
+/node/
+
+# self-bootstrap artifacts (portable Python + venv, like venv itself)
+/python/
+/venv312/
+/_venv312_install.log
+/_py*.tar.gz
+/_pytmp/
+
+# per-machine mode/session state (written by set_mode.py / the mode switch)
+/current_mode.txt
+/mode_profile.json
+/config.json.bak
+
+# secrets -- never commit
+/.civitai_token
+
+# server / debug logs
+/_v.log
+/_v.err.log
+*.log
+
+# local launcher leftovers & backups
+/run.bat.stock-backup
+/Forge.bat
+/_run_server.cmd
+
+# per-user extra launch arguments (read by all three start scripts)
+/extra-args.txt
+
+# upstream contribution staging (patches + issue drafts, posted manually)
+/upstream-patches/
+
+# llama-server's CUDA math libs are reused from the torch install (torch/lib) at
+# launch — NVIDIA redistributables, not our code, and each exceeds GitHub's 100MB limit
+/forge-llm/cublas64_12.dll
+/forge-llm/cublasLt64_12.dll

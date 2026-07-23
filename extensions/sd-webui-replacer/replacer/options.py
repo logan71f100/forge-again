@@ -1,0 +1,555 @@
+import os
+from pathlib import Path
+import gradio as gr
+from modules import shared
+
+EXT_NAME = None
+EXT_ROOT_DIRECTORY = str(Path(__file__).parent.parent.absolute())
+try:
+    extNameFilePath = os.path.join(EXT_ROOT_DIRECTORY, 'ExtensionName.txt')
+    if os.path.isfile(extNameFilePath):
+        with open(extNameFilePath, 'r') as f:
+            EXT_NAME = f.readline().strip()
+except :
+    EXT_NAME = None
+
+if EXT_NAME is None or EXT_NAME == "":
+    EXT_NAME = os.environ.get("SD_WEBUI_REPLACER_EXTENSION_NAME", "Replacer").strip()
+
+EXT_NAME_LOWER = EXT_NAME.lower().replace(' ', '_')
+
+defaultOutputDirectory = os.path.join('outputs', EXT_NAME_LOWER)
+
+
+compatibilityCmdOptsAttributes = ["lowvram", "lowram", "medvram", "medvram_sdxl"]
+for attribute in compatibilityCmdOptsAttributes:
+    if not hasattr(shared.cmd_opts, attribute):
+        setattr(shared.cmd_opts, attribute, False)
+
+
+def getSaveDir():
+    return shared.opts.data.get(EXT_NAME_LOWER + "_save_dir", defaultOutputDirectory)
+
+
+def getDedicatedPagePath():
+    return f'/{EXT_NAME_LOWER}-dedicated'
+
+
+def needAutoUnloadModels():
+    opt = shared.opts.data.get(EXT_NAME_LOWER + "_always_unload_models", 'Automatic')
+
+    if opt == 'Enabled':
+        return True
+    if opt == 'Disabled':
+        return False
+    if opt == 'Only SDXL':
+        return getattr(shared.sd_model, "is_sdxl", False)
+
+    return shared.cmd_opts.lowvram or shared.cmd_opts.medvram or (getattr(shared.sd_model, "is_sdxl", False) and shared.cmd_opts.medvram_sdxl)
+
+
+def doNotShowUnloadButton():
+    opt = shared.opts.data.get(EXT_NAME_LOWER + "_always_unload_models", 'Automatic')
+
+    if opt == 'Enabled':
+        return True
+    if opt == 'Disabled':
+        return False
+    if opt == 'Only SDXL':
+        return False
+
+    return shared.cmd_opts.lowvram or shared.cmd_opts.medvram
+
+
+
+def useCpuForDetection():
+    opt = shared.opts.data.get(EXT_NAME_LOWER + "_use_cpu_for_detection", False)
+    return opt
+
+def useFastDilation():
+    opt = shared.opts.data.get(EXT_NAME_LOWER + "_fast_dilation", True)
+    return opt
+
+
+def hideVideoInMainUI():
+    opt = shared.opts.data.get(EXT_NAME_LOWER + "_hide_video_main_ui", False)
+    return opt
+
+
+def extrasInDedicated():
+    opt = shared.opts.data.get(EXT_NAME_LOWER + "_add_extras_tab_into_dedicated_page", False)
+    return opt
+
+
+defaultMaskColor = '#84FF9A'
+
+def getMaskColorStr():
+    opt = shared.opts.data.get(EXT_NAME_LOWER + "_mask_color", defaultMaskColor)
+    return opt
+
+
+defaultVideoMaskEditingColor = "#5f008f"
+
+def getVideoMaskEditingColorStr():
+    opt = shared.opts.data.get(EXT_NAME_LOWER + "_video_mask_editing_color", defaultVideoMaskEditingColor)
+    return opt
+
+
+detectionPromptExamples_defaults = [
+            "background",
+            "hairstyle",
+            "t-shirt",
+        ]
+
+avoidancePromptExamples_defaults = [
+            "",
+            "face",
+            "hairstyle",
+            "clothes",
+        ]
+
+positivePromptExamples_defaults = [
+            "waterfall",
+            "photo of blonde girl",
+            "photo of girl with red t-shirt",
+        ]
+
+negativePromptExamples_defaults = [
+    "cartoon, painting, illustration, (worst quality, low quality, normal quality:2)",
+    "poor quality, low quality,  low res",
+]
+
+hiresFixPositivePromptSuffixExamples_defaults = [
+    "<lora:lcm-lora-sdv1-5:1>",
+    "<lora:sdxl_lightning_2step_lora:1>",
+    " ",
+]
+
+
+
+def getDetectionPromptExamples():
+    res : str = shared.opts.data.get(EXT_NAME_LOWER + "_detection_prompt_examples", "")
+    if res == "":
+        return detectionPromptExamples_defaults
+    else:
+        return res.split("\n")
+
+def getAvoidancePromptExamples():
+    res : str = shared.opts.data.get(EXT_NAME_LOWER + "_avoidance_prompt_examples", "")
+    if res == "":
+        return avoidancePromptExamples_defaults
+    else:
+        return res.split("\n")
+
+def getPositivePromptExamples():
+    res : str = shared.opts.data.get(EXT_NAME_LOWER + "_positive_prompt_examples", "")
+    if res == "":
+        return positivePromptExamples_defaults
+    else:
+        return res.split("\n")
+
+def getNegativePromptExamples():
+    res : str = shared.opts.data.get(EXT_NAME_LOWER + "_negative_prompt_examples", "")
+    if res == "":
+        return negativePromptExamples_defaults
+    else:
+        return res.split("\n")
+
+def getHiresFixPositivePromptSuffixExamples():
+    res : str = shared.opts.data.get(EXT_NAME_LOWER + "_hf_positive_prompt_suffix_examples", "")
+    if res == "":
+        return hiresFixPositivePromptSuffixExamples_defaults
+    else:
+        return res.split("\n")
+
+
+def useFirstPositivePromptFromExamples():
+    res : bool = shared.opts.data.get(EXT_NAME_LOWER + "_use_first_positive_prompt_from_examples", True)
+    return res
+
+def useFirstNegativePromptFromExamples():
+    res : bool = shared.opts.data.get(EXT_NAME_LOWER + "_use_first_negative_prompt_from_examples", True)
+    return res
+
+def needHideSegmentAnythingAccordions():
+    res : bool = shared.opts.data.get(EXT_NAME_LOWER + "_hide_segment_anything_accordions", False)
+    return res
+
+def needHideAnimateDiffAccordions():
+    res : bool = shared.opts.data.get(EXT_NAME_LOWER + "_hide_animatediff_accordions", False)
+    return res
+
+def needHideReplacerScript():
+    res : bool = shared.opts.data.get(EXT_NAME_LOWER + "_hide_replacer_script", False)
+    return res
+
+
+def getDetectionPromptExamplesNumber():
+    res : int = shared.opts.data.get(EXT_NAME_LOWER + "_examples_per_page_for_detection_prompt", 10)
+    return res
+
+def getAvoidancePromptExamplesNumber():
+    res : int = shared.opts.data.get(EXT_NAME_LOWER + "_examples_per_page_for_avoidance_prompt", 10)
+    return res
+
+def getPositivePromptExamplesNumber():
+    res : int = shared.opts.data.get(EXT_NAME_LOWER + "_examples_per_page_for_positive_prompt", 10)
+    return res
+
+def getNegativePromptExamplesNumber():
+    res : int = shared.opts.data.get(EXT_NAME_LOWER + "_examples_per_page_for_negative_prompt", 10)
+    return res
+
+def getLimitMaskEditingResolution():
+    res : int = shared.opts.data.get(EXT_NAME_LOWER + "_limit_mask_editing_resolution", 1280)
+    return res
+
+
+if not hasattr(shared.OptionInfo, 'needs_reload_ui'): # webui 1.5.0
+    shared.OptionInfo.needs_reload_ui = lambda self: self.info('requires Reload UI')
+    shared.OptionInfo.needs_restart = lambda self: self.info('requires restart')
+
+
+section = (EXT_NAME_LOWER, EXT_NAME)
+preloaded_options = {
+    EXT_NAME_LOWER + "_default_extra_includes": shared.OptionInfo(
+        ["script"],
+        "Defaults for Extra include in gallery",
+        gr.CheckboxGroup,
+        {
+            'choices' : ["mask", "box", "cut", "preview", "script"],
+        },
+        section=section,
+    ).needs_reload_ui(),
+}
+shared.options_templates.update(shared.options_section(section, preloaded_options))
+
+
+def on_ui_settings():
+    global section
+
+    # The prompt example chips shown next to the Detection/Positive/Negative prompt
+    # fields. One chip per line; clicking a chip replaces the field's content.
+    # These three hold the CURRENTLY ACTIVE chips; a mode switch (sd/xl/flux)
+    # rewrites them from the per-mode presets below (or built-in defaults).
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_detection_prompt_examples",
+        shared.OptionInfo(
+            "",
+            "Detection prompt example chips — currently active (one per line; rewritten on mode switch)",
+            gr.Textbox,
+            {"lines": 4},
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_positive_prompt_examples",
+        shared.OptionInfo(
+            "",
+            "Positive prompt example chips — currently active (one per line; rewritten on mode switch)",
+            gr.Textbox,
+            {"lines": 4},
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_negative_prompt_examples",
+        shared.OptionInfo(
+            "",
+            "Negative prompt example chips — currently active (one per line; rewritten on mode switch)",
+            gr.Textbox,
+            {"lines": 4},
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    # Per-mode chip PRESETS: applied whenever the UI mode switches to that mode.
+    # Empty = the SFW built-in defaults in set_mode.py. Stored in config.json
+    # (untracked), so personal presets never enter git.
+    for _mode in ("sd", "xl", "flux"):
+        for _name in ("detection", "positive", "negative"):
+            shared.opts.add_option(
+                f"replacer_mode_chips_{_mode}_{_name}",
+                shared.OptionInfo(
+                    "",
+                    f"{_mode} mode: {_name} prompt chips preset (one per line; empty = built-in defaults)",
+                    gr.Textbox,
+                    {"lines": 3},
+                    section=section,
+                )
+            )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_use_first_positive_prompt_from_examples",
+        shared.OptionInfo(
+            True,
+            "Use first positive prompt form examples, if field is empty",
+            gr.Checkbox,
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_use_first_negative_prompt_from_examples",
+        shared.OptionInfo(
+            True,
+            "Use first negative prompt form examples, if field is empty",
+            gr.Checkbox,
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_hide_segment_anything_accordions",
+        shared.OptionInfo(
+            False,
+            f"Hide Segment Anything accordions in txt2img and img2img tabs. Useful if you installed it only for {EXT_NAME}",
+            gr.Checkbox,
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_hide_animatediff_accordions",
+        shared.OptionInfo(
+            False,
+            f"Hide AnimateDiff accordions in txt2img and img2img tabs. Useful if you installed it only for {EXT_NAME}",
+            gr.Checkbox,
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_hide_replacer_script",
+        shared.OptionInfo(
+            False,
+            f"Hide {EXT_NAME} accordions in txt2img and img2img tabs",
+            gr.Checkbox,
+            section=section,
+        ).needs_reload_ui()
+    )
+
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_always_unload_models",
+        shared.OptionInfo(
+            'Automatic',
+            "Always unload detection models after generation",
+            gr.Radio,
+            {
+                'choices' : ['Automatic', 'Enabled', 'Only SDXL', 'Disabled'],
+            },
+            section=section,
+        ).info("Significantly increases detection time but reduces vram usage. "\
+               "Automatic means enable only for --lowvram and --medvram mode. "\
+            )
+    )
+
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_use_cpu_for_detection",
+        shared.OptionInfo(
+            False,
+            "Use CPU for detection (SAM + Dino). For AMD Radeon and Intel ARC or if you don't have enough vram",
+            gr.Checkbox,
+            section=section,
+        ).needs_restart()
+    )
+
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_fast_dilation",
+        shared.OptionInfo(
+            True,
+            "Use fast mask dilation (Squarer)",
+            gr.Checkbox,
+            section=section,
+        ).needs_restart()
+    )
+
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_mask_color",
+        shared.OptionInfo(
+            defaultMaskColor,
+            "Color for mask in preview (fast dilation) and default for Custom mask and Avoidance mask",
+            gr.ColorPicker,
+            section=section,
+        ).needs_reload_ui()
+    )
+
+
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_detection_prompt_examples",
+        shared.OptionInfo(
+            "",
+            "Override Detection prompt examples",
+            gr.Textbox,
+            {
+                "lines" : 2,
+                "placeholder" : "\n".join(detectionPromptExamples_defaults),
+            },
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_avoidance_prompt_examples",
+        shared.OptionInfo(
+            "",
+            "Override Avoidance prompt examples",
+            gr.Textbox,
+            {
+                "lines" : 2,
+                "placeholder" : "\n".join(avoidancePromptExamples_defaults),
+            },
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_positive_prompt_examples",
+        shared.OptionInfo(
+            "",
+            "Override Positive prompt examples",
+            gr.Textbox,
+            {
+                "lines" : 2,
+                "placeholder" : "\n".join(positivePromptExamples_defaults),
+            },
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_negative_prompt_examples",
+        shared.OptionInfo(
+            "",
+            "Override Negative prompt examples",
+            gr.Textbox,
+            {
+                "lines" : 2,
+                "placeholder" : "\n".join(negativePromptExamples_defaults),
+            },
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_hf_positive_prompt_suffix_examples",
+        shared.OptionInfo(
+            "",
+            "Override HiresFix suffix for positive prompt examples",
+            gr.Textbox,
+            {
+                "lines" : 2,
+                "placeholder" : "\n".join(hiresFixPositivePromptSuffixExamples_defaults),
+            },
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_examples_per_page_for_detection_prompt",
+        shared.OptionInfo(
+            10,
+            "Override number of examples per pages for detection prompt",
+            gr.Number,
+            section=section,
+        ).needs_reload_ui().info('Set 0 to hide')
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_examples_per_page_for_avoidance_prompt",
+        shared.OptionInfo(
+            10,
+            "Override number of examples per pages for avoidance prompt",
+            gr.Number,
+            section=section,
+        ).needs_reload_ui().info('Set 0 to hide')
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_examples_per_page_for_positive_prompt",
+        shared.OptionInfo(
+            10,
+            "Override number of examples per pages for positive prompt",
+            gr.Number,
+            section=section,
+        ).needs_reload_ui().info('Set 0 to hide')
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_examples_per_page_for_negative_prompt",
+        shared.OptionInfo(
+            10,
+            "Override number of examples per pages for negative prompt",
+            gr.Number,
+            section=section,
+        ).needs_reload_ui().info('Set 0 to hide')
+    )
+
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_save_dir",
+        shared.OptionInfo(
+            defaultOutputDirectory,
+            f"{EXT_NAME} save directory",
+            gr.Textbox,
+            {
+                "visible": not shared.cmd_opts.hide_ui_dir_config,
+            },
+            section=section,
+        )
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_limit_mask_editing_resolution",
+        shared.OptionInfo(
+            1280,
+            "Limit resolution in all mask editors",
+            gr.Number,
+            {
+                "minimum": 256,
+                "maximum": 4096,
+                "precision": 0,
+            },
+            section=section,
+        )
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_video_mask_editing_color",
+        shared.OptionInfo(
+            defaultVideoMaskEditingColor,
+            "Color for editing mask in video masking tab",
+            gr.ColorPicker,
+            section=section,
+        ).needs_reload_ui()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_hide_video_main_ui",
+        shared.OptionInfo(
+            False,
+            "Hide video tab in main ui",
+            gr.Checkbox,
+            section=section,
+        ).info("Show only in dedicated tab").needs_restart()
+    )
+
+    shared.opts.add_option(
+        EXT_NAME_LOWER + "_add_extras_tab_into_dedicated_page",
+        shared.OptionInfo(
+            False,
+            "Add extras tab into dedicated page",
+            gr.Checkbox,
+            section=section,
+        ).needs_reload_ui()
+    )
+
+
+

@@ -1,0 +1,50 @@
+div.replacer-batch-count-size{
+    min-width: 11em !important;
+}
+
+div.replacer-generation-size{
+    min-width: 11em !important;
+}
+
+button.replacer-pause-button{
+    text-align: left;
+    width: fit-content;
+    left: 0;
+}
+
+#replacer_video_masking_page_label {
+    height: 40px !important;
+    font-size: 120%;
+    text-align: center;
+}
+
+#replacer_video_masking_progress_gallery_container {
+    display: none;
+}
+
+#image_buttons_replacer_video_masking_progress {
+    display: none;
+}
+
+#replacer_video_masking_progress_results_panel {
+    background: unset;
+    margin-top: 20px;
+    margin-bottom: 3px;
+    padding: unset;
+}
+
+#replacer_video_gallery {
+    height: 440px;
+}
+
+/* prompt example chips: one full-width readable line per example */
+.replacer-example-chips{
+    gap: 4px !important;
+}
+.replacer-example-chips button{
+    white-space: normal !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    line-height: 1.3;
+    padding: 6px 10px !important;
+}

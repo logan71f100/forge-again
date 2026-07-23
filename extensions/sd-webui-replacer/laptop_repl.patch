@@ -1,0 +1,178 @@
+diff --git a/replacer/inpaint.py b/replacer/inpaint.py
+index a2bee75..3030b43 100644
+--- a/replacer/inpaint.py
++++ b/replacer/inpaint.py
+@@ -102,6 +102,11 @@ def inpaint(
+     p.extra_generation_params["Mask blur"] = gArgs.mask_blur
+     addReplacerMetadata(p, gArgs)
+     p.seed = gArgs.seed
++    # Flux Fill needs far higher distilled guidance than the 3.5 default (BFL Fill ref ~30), else output is
++    # soft/washed. Set by the forge wrapper's mode profile (env); SDXL ignores it (use_distilled_cfg_scale=False).
++    import os as _os
++    p.distilled_cfg_scale = float(_os.environ.get('REPLACER_FLUX_GUIDANCE', '3.5'))
++    p.extra_generation_params['Distilled CFG Scale'] = p.distilled_cfg_scale
+     p.do_not_save_grid = True
+     try:
+         if replacer_extensions.controlnet.SCRIPT and gArgs.cn_args is not None and len(gArgs.cn_args) != 0:
+diff --git a/replacer/options.py b/replacer/options.py
+index 107ddc2..d0ae924 100644
+--- a/replacer/options.py
++++ b/replacer/options.py
+@@ -43,9 +43,9 @@ def needAutoUnloadModels():
+     if opt == 'Disabled':
+         return False
+     if opt == 'Only SDXL':
+-        return shared.sd_model.is_sdxl
++        return getattr(shared.sd_model, "is_sdxl", False)
+ 
+-    return shared.cmd_opts.lowvram or shared.cmd_opts.medvram or (shared.sd_model.is_sdxl and shared.cmd_opts.medvram_sdxl)
++    return shared.cmd_opts.lowvram or shared.cmd_opts.medvram or (getattr(shared.sd_model, "is_sdxl", False) and shared.cmd_opts.medvram_sdxl)
+ 
+ 
+ def doNotShowUnloadButton():
+diff --git a/replacer/ui/make_advanced_options.py b/replacer/ui/make_advanced_options.py
+index 85554f2..81c8f82 100644
+--- a/replacer/ui/make_advanced_options.py
++++ b/replacer/ui/make_advanced_options.py
+@@ -1,5 +1,21 @@
++import os as _os
+ import gradio as gr
+ from modules import shared, sd_samplers, ui, ui_settings, errors
++
++
++def _envdef(key, default):
++    # Default value for a UI slider, overridable per mode-profile via env (set by the forge wrapper menu).
++    try:
++        return type(default)(_os.environ.get(key, default))
++    except Exception:
++        return default
++
++
++def _envchoice(key, default, choices):
++    # Default for a dropdown/radio; uses the env value only if it's a valid choice.
++    v = _os.environ.get(key)
++    return v if v in choices else default
++
+ from modules.ui_components import ToolButton
+ from modules.ui_common import refresh_symbol
+ from replacer.options import (EXT_NAME_LOWER, doNotShowUnloadButton, getAvoidancePromptExamples,
+@@ -21,7 +37,7 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+                         label='Sampling method',
+                         elem_id="replacer_sampler",
+                         choices=sampler_names,
+-                        value=defaultSampler
++                        value=_envchoice('REPLACER_DEF_SAMPLER', defaultSampler, sampler_names)
+                     )
+ 
+                     if IS_WEBUI_1_9:
+@@ -31,13 +47,13 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+                             label='Schedule type',
+                             elem_id=f"replacer_scheduler",
+                             choices=scheduler_names,
+-                            value=scheduler_names[0])
++                            value=_envchoice('REPLACER_DEF_SCHEDULER', scheduler_names[0], scheduler_names))
+                     else:
+                         comp.scheduler = gr.Textbox("", visible=False)
+ 
+                     comp.steps = gr.Slider(
+                         label='Steps',
+-                        value=20,
++                        value=_envdef('REPLACER_DEF_STEPS', 20),
+                         step=1,
+                         minimum=1,
+                         maximum=150,
+@@ -46,7 +62,7 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+ 
+                 with gr.Row():
+                     comp.cfg_scale = gr.Slider(label='CFG Scale',
+-                        value=5.5, elem_id="replacer_cfg_scale",
++                        value=_envdef('REPLACER_DEF_CFG', 5.5), elem_id="replacer_cfg_scale",
+                         minimum=1.0, maximum=30.0, step=0.5)
+ 
+                     comp.correct_aspect_ratio = gr.Checkbox(label='Correct aspect ratio',
+@@ -55,10 +71,10 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+                 with gr.Row():
+                     with gr.Column(elem_id="replacer_width_height_column", elem_classes="replacer-generation-size"):
+                         comp.width = gr.Slider(label='width',
+-                            value=512, elem_id="replacer_width",
++                            value=_envdef('REPLACER_DEF_WIDTH', 512), elem_id="replacer_width",
+                             minimum=64, maximum=2048, step=8)
+                         comp.height = gr.Slider(label='height',
+-                            value=512, elem_id="replacer_height",
++                            value=_envdef('REPLACER_DEF_HEIGHT', 512), elem_id="replacer_height",
+                             minimum=64, maximum=2048, step=8)
+                     with gr.Column(elem_id="replacer_batch_count_size_column", elem_classes="replacer-batch-count-size"):
+                         comp.batch_count = gr.Slider(label='batch count',
+@@ -104,10 +120,10 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+             with gr.Tab('Detection'):
+                 with gr.Row():
+                     comp.box_threshold = gr.Slider(label='Box Threshold',
+-                        value=0.3, elem_id="replacer_box_threshold",
++                        value=_envdef('REPLACER_DEF_BOX_THRESHOLD', 0.3), elem_id="replacer_box_threshold",
+                         minimum=0.0, maximum=1.0, step=0.01)
+                     comp.mask_expand = gr.Slider(label='Mask Expand',
+-                        value=35, elem_id="replacer_mask_expand",
++                        value=_envdef('REPLACER_DEF_MASK_EXPAND', 35), elem_id="replacer_mask_expand",
+                         minimum=-50, maximum=100, step=1)
+ 
+                 with gr.Row():
+@@ -153,15 +169,15 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+             with gr.Tab('Inpainting'):
+                 with gr.Row():
+                     comp.mask_blur = gr.Slider(label='Mask Blur',
+-                        value=4, elem_id="replacer_mask_blur",
++                        value=_envdef('REPLACER_DEF_MASK_BLUR', 4), elem_id="replacer_mask_blur",
+                         minimum=0, maximum=100, step=1)
+                     comp.inpaint_padding = gr.Slider(label='Padding',
+-                        value=90, elem_id="replacer_inpaint_padding",
++                        value=_envdef('REPLACER_DEF_PADDING', 90), elem_id="replacer_inpaint_padding",
+                         minimum=0, maximum=1000, step=1)
+ 
+                 with gr.Row():
+                     comp.denoise = gr.Slider(label='Denoising',
+-                        value=1.0, elem_id="replacer_denoise",
++                        value=_envdef('REPLACER_DEF_DENOISE', 1.0), elem_id="replacer_denoise",
+                         minimum=0.0, maximum=1.0, step=0.01)
+                     comp.forbid_too_small_crop_region = gr.Checkbox(label='Forbid too small crop region',
+                         value=True, visible=hasattr(shared.opts, 'forbid_too_small_crop_region'),
+@@ -170,7 +186,8 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+                 with gr.Row():
+                     comp.inpainting_fill = gr.Radio(label='Masked content',
+                         choices=['fill', 'original', 'latent noise', 'latent nothing'],
+-                        value='fill', type="index", elem_id="replacer_inpainting_fill")
++                        value=_envchoice('REPLACER_DEF_FILL', 'fill', ['fill', 'original', 'latent noise', 'latent nothing']),
++                        type="index", elem_id="replacer_inpainting_fill")
+ 
+                 with gr.Row():
+                     comp.inpainting_mask_invert = gr.Radio(
+@@ -274,7 +291,7 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+                         tool="sketch",
+                         image_mode="RGB",
+                         brush_color=getMaskColorStr(),
+-                        height=shared.opts.img2img_editor_height
++                        height=getattr(shared.opts, "img2img_editor_height", 720)
+                     )
+                 with gr.Row():
+                     gr.Markdown("*If image isn't fit, use fullscreen hotkey or resize column*")
+@@ -306,7 +323,7 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
+                         tool="sketch",
+                         image_mode="RGB",
+                         brush_color=getMaskColorStr(),
+-                        height=shared.opts.img2img_editor_height
++                        height=getattr(shared.opts, "img2img_editor_height", 720)
+                     )
+                 with gr.Row():
+                     gr.Markdown("*If image isn't fit, use fullscreen hotkey or resize column*")
+diff --git a/replacer/ui/replacer_tab_ui.py b/replacer/ui/replacer_tab_ui.py
+index 19b8825..28502d3 100644
+--- a/replacer/ui/replacer_tab_ui.py
++++ b/replacer/ui/replacer_tab_ui.py
+@@ -23,7 +23,7 @@ from replacer.tools import Pause
+ def getTabUI(comp: AttrDict, isDedicatedPage: bool):
+     with gr.Blocks(analytics_enabled=False) as replacerTabUI:
+         comp.selected_input_mode = gr.Textbox(value="tab_single", visible=False)
+-        comp.dummy_component = gr.Label(visible=False)
++        comp.dummy_component = gr.Textbox(visible=False)  # was gr.Label — gradio4 LabelData crash on Run (it's just a string task_id carrier)
+         comp.trueComponent = gr.Checkbox(value=True, visible=False)
+         comp.falseComponent = gr.Checkbox(value=False, visible=False)
+         if replacer_extensions.controlnet.SCRIPT:
