@@ -3,7 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/logan71f100/forge-again)](https://github.com/logan71f100/forge-again/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE.txt)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
-![Gradio 6.20](https://img.shields.io/badge/gradio-6.20-orange.svg)
+![Gradio 6.20](https://img.shields.io/badge/gradio-6.20-blue.svg)
 
 A modernized fork of [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge), ported to the current Python/Gradio/HF ecosystem and packaged to be deployable from a single script.
 
