@@ -8,7 +8,7 @@ A modernized fork of [Stable Diffusion WebUI Forge](https://github.com/lllyasvie
 *The main UI — the SD / XL / Flux mode switch, the full tab set, and all the generation controls.*
 
 ![The built-in AI copilot](docs/images/ai-assistant.png)
-*The AI assistant reads every control, critiques your images, and edits the prompt itself — and hibernates its own VRAM so Forge can generate, then wakes back up (~1.5 s) to keep helping.*
+*The AI assistant reads every control, critiques your images, and edits the prompt itself — and hibernates itself to system RAM to hand its VRAM back to Forge for generating, then wakes (~1.5 s) with its context intact to keep helping.*
 
 ![The Replacer tab](docs/images/replacer.png)
 *Replacer — detection-prompt masking + inpainting in one tab; here, detecting a shirt and swapping it.*
