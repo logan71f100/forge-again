@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cu126
 setuptools>=70,<81   # was ==69.5.1; torch 2.13 needs >=70, but setuptools 81 removed pkg_resources which pytorch_lightning 1.9.4 still requires
-GitPython==3.1.32
+GitPython==3.1.52   # security: clears 11 GHSAs (command-injection/path-traversal); API-compatible patch bump
 Pillow>=11   # forced to 12.x by the modern stack (was 9.5.0)
 accelerate==1.14.0
 blendmodes>=2025   # numpy-2 / Pillow-12 compatible (2022 capped numpy<2, Pillow<10)
