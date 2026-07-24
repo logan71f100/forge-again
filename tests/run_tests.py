@@ -1383,7 +1383,6 @@ def check_ui_regression() -> None:
                 "replacer_video_open_folder",
                 "loadPhotopea",                  # ControlNet, fires per UI update
                 "loadOpenposeEditor",            # ControlNet
-                "Cannot read properties of null (reading 'value')",
             )
             noise = ("favicon", "ERR_INTERNET_DISCONNECTED", "net::ERR_ABORTED",
                      "Failed to load resource")
