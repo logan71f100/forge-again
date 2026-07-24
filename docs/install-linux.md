@@ -1,8 +1,14 @@
 # Installing forge-again on Linux
 
 Two options: run it **natively** with `start.sh`, or run it in **[Docker](install-docker.md)**.
-Docker is the more reproducible path and is what's been explicitly verified end to end;
-the native launcher shares all its logic with the Windows one but gets less testing.
+
+**Docker is verified** — the image has been built and run, the GPU confirmed visible
+inside the container, and SDXL generation tested end to end. **The native launcher is
+untested**: it shares its logic with the Windows launcher, which is exercised daily, but
+nobody has run `start.sh` on a clean Linux box and confirmed it. If you do, an
+[issue](https://github.com/logan71f100/forge-again/issues) either way is genuinely useful.
+
+If you want the path most likely to just work, use Docker.
 
 ## Requirements
 
