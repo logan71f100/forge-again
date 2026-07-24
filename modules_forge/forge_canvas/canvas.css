@@ -97,6 +97,13 @@
     background-color: #3e3e3e;
 }
 
+/* !important: the gradio-6 theme styles these raw buttons (its ".gradio-style button"
+   rule out-cascades every .forge-btn rule above), so the active state must force through. */
+.forge-toolbar .forge-btn.forge-btn-active, .forge-toolbar-static .forge-btn.forge-btn-active {
+    background-color: #ff7c00 !important;
+    color: black !important;
+}
+
 .forge-toolbar-box-a {
     flex-wrap: wrap;
 }
