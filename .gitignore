@@ -50,6 +50,12 @@ notification.mp3
 !/extensions/sd-webui-replacer/
 !/extensions/sd-webui-segment-anything/
 !/extensions/forge-ai-assistant/
+!/extensions/forge-onetrainer/
+
+# forge-onetrainer clones OneTrainer (its own multi-GB venv) and writes per-run
+# work dirs at runtime -- track the extension's own code, never those.
+/extensions/forge-onetrainer/OneTrainer/
+/extensions/forge-onetrainer/work/
 
 # assistant runtime state + secrets never enter git (the *.pth rule above keeps
 # segment-anything's SAM/GroundingDINO model weights out too)
