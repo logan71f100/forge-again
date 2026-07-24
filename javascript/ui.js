@@ -255,6 +255,9 @@ function restoreProgressImg2img() {
 function setupResolutionPasting(tabname) {
     var width = gradioApp().querySelector(`#${tabname}_width input[type=number]`);
     var height = gradioApp().querySelector(`#${tabname}_height input[type=number]`);
+    // img2img is lazily built, so these are null at load. Bail; the caller
+    // retries once the tab mounts.
+    if (!width || !height) return;
     for (const el of [width, height]) {
         el.addEventListener('paste', function(event) {
             var pasteData = event.clipboardData.getData('text/plain');
@@ -270,11 +273,27 @@ function setupResolutionPasting(tabname) {
     }
 }
 
+function setupImg2imgLoadHooks() {
+    showRestoreProgressButton('img2img', localGet("img2img_task_id"));
+    setupResolutionPasting('img2img');
+}
+
 onUiLoaded(function() {
     showRestoreProgressButton('txt2img', localGet("txt2img_task_id"));
-    showRestoreProgressButton('img2img', localGet("img2img_task_id"));
     setupResolutionPasting('txt2img');
-    setupResolutionPasting('img2img');
+    setupImg2imgLoadHooks();
+    // img2img is lazily built, so its width/height inputs aren't present above.
+    // Wire them once the tab mounts (setupResolutionPasting is idempotent-safe:
+    // a duplicate paste listener is harmless, and this only fires once).
+    if (!gradioApp().querySelector('#img2img_width input[type=number]')) {
+        var obs = new MutationObserver(function() {
+            if (gradioApp().querySelector('#img2img_width input[type=number]')) {
+                setupImg2imgLoadHooks();
+                obs.disconnect();
+            }
+        });
+        obs.observe(gradioApp(), {childList: true, subtree: true});
+    }
 });
 
 

@@ -18,6 +18,7 @@ function toggleCss(key, css, enable) {
 function setupExtraNetworksForTab(tabname) {
     function registerPrompt(tabname, id) {
         var textarea = gradioApp().querySelector("#" + id + " > label > textarea");
+        if (!textarea) return;   // prompt not mounted yet (lazy tab)
 
         if (!activePromptTextarea[tabname]) {
             activePromptTextarea[tabname] = textarea;
@@ -29,6 +30,12 @@ function setupExtraNetworksForTab(tabname) {
     }
 
     var tabnav = gradioApp().querySelector('#' + tabname + '_extra_tabs > div.tab-nav');
+    // img2img is a lazily-built tab, so its extra-networks nav does not exist
+    // when this first runs at load. Bail quietly instead of throwing on
+    // tabnav.appendChild(null); setupExtraNetworks() retries once it mounts.
+    if (!tabnav) return;
+    // Idempotent: a retry must not add a second controls div.
+    if (tabnav.querySelector(':scope > .extra-networks-controls-div')) return;
     var controlsDiv = document.createElement('DIV');
     controlsDiv.classList.add('extra-networks-controls-div');
     tabnav.appendChild(controlsDiv);
@@ -231,6 +238,22 @@ var activePromptTextarea = {};
 function setupExtraNetworks() {
     setupExtraNetworksForTab('txt2img');
     setupExtraNetworksForTab('img2img');
+
+    // img2img builds lazily, so its extra-networks nav usually isn't present on
+    // the first pass above (which is why that used to throw). Watch for it and
+    // wire it once it appears; setupExtraNetworksForTab is idempotent, so a
+    // spurious fire is harmless. The observer disconnects once img2img is done.
+    if (!gradioApp().querySelector('#img2img_extra_tabs > div.tab-nav')) {
+        var obs = new MutationObserver(function() {
+            if (gradioApp().querySelector('#img2img_extra_tabs > div.tab-nav')) {
+                setupExtraNetworksForTab('img2img');
+                if (gradioApp().querySelector('#img2img_extra_tabs .extra-networks-controls-div')) {
+                    obs.disconnect();
+                }
+            }
+        });
+        obs.observe(gradioApp(), {childList: true, subtree: true});
+    }
 }
 
 var re_extranet = /<([^:^>]+:[^:]+):[\d.]+>(.*)/;

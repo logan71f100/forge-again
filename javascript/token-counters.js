@@ -48,6 +48,12 @@ function setupTokenCounting(id, id_counter, id_button) {
     var counter = gradioApp().getElementById(id_counter);
     var textarea = gradioApp().querySelector(`#${id} > label > textarea`);
 
+    // img2img prompts live in a lazily-built tab, so these are null at load.
+    // Bail quietly; setupTokenCounting is retried once img2img mounts.
+    if (!prompt || !counter || !textarea) {
+        return;
+    }
+
     if (counter.parentElement == prompt.parentElement) {
         return;
     }
@@ -66,6 +72,7 @@ function setupTokenCounting(id, id_counter, id_button) {
 
 function toggleTokenCountingVisibility(id, id_counter, id_button) {
     var counter = gradioApp().getElementById(id_counter);
+    if (!counter) return;   // lazy tab not mounted yet
 
     counter.style.display = opts.disable_token_counters ? "none" : "block";
     counter.classList.toggle("token-counter-visible", !opts.disable_token_counters);
@@ -80,6 +87,17 @@ function runCodeForTokenCounters(fun) {
 
 onUiLoaded(function() {
     runCodeForTokenCounters(setupTokenCounting);
+    // img2img is lazy, so its prompts aren't set up on the first pass. Retry
+    // once they appear; setupTokenCounting is a no-op when already wired.
+    if (!gradioApp().querySelector('#img2img_token_counter')) {
+        var obs = new MutationObserver(function() {
+            if (gradioApp().querySelector('#img2img_token_counter')) {
+                runCodeForTokenCounters(setupTokenCounting);
+                obs.disconnect();
+            }
+        });
+        obs.observe(gradioApp(), {childList: true, subtree: true});
+    }
 });
 
 onOptionsChanged(function() {

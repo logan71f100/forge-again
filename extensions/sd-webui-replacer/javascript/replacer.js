@@ -149,15 +149,23 @@ function replacerRemoveVideoMaskUpload() {
 onUiUpdate(replacerRemoveVideoMaskUpload);
 
 
+function clearReplacerGenerateTitles() {
+    let ids = ['replacer_generate', 'replacer_hf_generate',
+               'replacer_video_masks_detect_generate', 'replacer_video_gen_generate'];
+    let els = ids.map(id => gradioApp().getElementById(id));
+    // Replacer is a lazily-built tab, so these are null until it opens. Wait
+    // until they all exist, then clear the tooltips in one pass.
+    if (els.some(el => !el)) return false;
+    els.forEach(el => { el.title = ''; });
+    return true;
+}
+
 onUiLoaded(function () {
-    let replacer_generate = gradioApp().getElementById('replacer_generate');
-    let replacer_hf_generate = gradioApp().getElementById('replacer_hf_generate');
-    let replacer_video_masks_detect_generate = gradioApp().getElementById('replacer_video_masks_detect_generate');
-    let replacer_video_gen_generate = gradioApp().getElementById('replacer_video_gen_generate');
-    replacer_generate.title = '';
-    replacer_hf_generate.title = '';
-    replacer_video_masks_detect_generate.title = '';
-    replacer_video_gen_generate.title = '';
+    if (clearReplacerGenerateTitles()) return;
+    var obs = new MutationObserver(function () {
+        if (clearReplacerGenerateTitles()) obs.disconnect();
+    });
+    obs.observe(gradioApp(), {childList: true, subtree: true});
 });
 
 
@@ -292,8 +300,19 @@ function closeAllVideoMasks() {
 }
 
 
+function hideReplacerVideoOpenFolder() {
+    var el = document.getElementById('replacer_video_open_folder');
+    if (!el || !el.parentElement) return false;   // Replacer is a lazily-built tab
+    el.parentElement.style.display = 'none';
+    return true;
+}
+
 onUiLoaded(function () {
-    document.getElementById('replacer_video_open_folder').parentElement.style.display = 'none';
+    if (hideReplacerVideoOpenFolder()) return;
+    var obs = new MutationObserver(function () {
+        if (hideReplacerVideoOpenFolder()) obs.disconnect();
+    });
+    obs.observe(gradioApp(), {childList: true, subtree: true});
 });
 
 

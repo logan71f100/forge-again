@@ -1370,19 +1370,14 @@ def check_ui_regression() -> None:
             # Baselined rather than ignored, so a NEW error still fails here
             # instead of hiding in the noise.
             known = (
-                # Page-load / after-update callbacks that dereference elements
-                # belonging to lazily-built tabs, which don't exist until that
-                # tab is opened. Harmless today -- the features work once built
-                # -- but they are real null derefs and worth fixing. Baselined
-                # by signature rather than ignored, so a NEW error still fails.
-                "settings_search",
-                "runCodeForTokenCounters",
-                "showRestoreProgressButton",
-                "setupExtraNetworks",
-                "replacer_generate",
-                "replacer_video_open_folder",
-                "loadPhotopea",                  # ControlNet, fires per UI update
-                "loadOpenposeEditor",            # ControlNet
+                # Empty by design: every lazy-tab null-deref that used to live
+                # here (settings search, extra-networks, token counters, restore
+                # button, resolution paste, ControlNet photopea/openpose,
+                # Replacer) has been fixed at the source. Anything that appears
+                # here now is a real regression. The only remaining console
+                # message is a 404 for the Source Sans Pro font stylesheet
+                # (gradio serves it under a path our mount doesn't cover; the
+                # font falls back to system-ui), which the noise filter drops.
             )
             noise = ("favicon", "ERR_INTERNET_DISCONNECTED", "net::ERR_ABORTED",
                      "Failed to load resource")

@@ -59,10 +59,15 @@
         const tabs = gradioApp().querySelectorAll('#controlnet .input-accordion');
         tabs.forEach(tab => {
             if (cnetOpenposeEditorRegisteredElements.has(tab)) return;
-            cnetOpenposeEditorRegisteredElements.add(tab);
 
             const generatedImageGroup = tab.querySelector('.cnet-generated-image-group');
-            const editButton = generatedImageGroup.querySelector('.cnet-edit-pose');
+            const editButton = generatedImageGroup && generatedImageGroup.querySelector('.cnet-edit-pose');
+            // The accordion mounts in pieces during UI churn. If the pieces
+            // aren't there yet, skip WITHOUT marking the tab registered, so the
+            // next UI update retries -- the previous code marked it first and
+            // then threw, permanently leaving the pose editor unwired.
+            if (!generatedImageGroup || !editButton) return;
+            cnetOpenposeEditorRegisteredElements.add(tab);
 
             editButton.addEventListener('click', async () => {
                 const inputImageGroup = tab.querySelector('.cnet-input-image-group');
@@ -128,7 +133,8 @@
             });
 
             const inputImageGroup = tab.querySelector('.cnet-input-image-group');
-            const uploadButton = inputImageGroup.querySelector('.cnet-upload-pose input');
+            const uploadButton = inputImageGroup && inputImageGroup.querySelector('.cnet-upload-pose input');
+            if (!uploadButton) return;
             // Updates preview image when JSON file is uploaded.
             uploadButton.addEventListener('change', (event) => {
                 const file = event.target.files[0];

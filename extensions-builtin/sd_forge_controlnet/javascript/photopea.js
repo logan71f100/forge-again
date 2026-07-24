@@ -394,19 +394,29 @@
   function loadPhotopea() {
     function registerCallbacks(accordion) {
       const photopeaMainTrigger = accordion.querySelector('.cnet-photopea-main-trigger');
-      // Photopea edit feature disabled.
+      // Photopea edit feature disabled. This is terminal, so report success --
+      // returning false here would re-log it on every UI update forever.
       if (!photopeaMainTrigger) {
         console.log("ControlNet photopea edit disabled.");
-        return;
+        return true;
       }
 
       const closeModalButton = accordion.querySelector('.cnet-photopea-edit .cnet-modal-close');
+      const fetchButton = accordion.querySelector('.photopea-fetch');
+      const sendButton = accordion.querySelector('.photopea-send');
+      // The accordion mounts in pieces during UI churn, so these can be null on
+      // an early pass. Return false so the caller does NOT mark it registered
+      // and retries once it's fully built, instead of throwing every update.
+      if (!closeModalButton || !fetchButton || !sendButton) {
+        return false;
+      }
       const tabs = accordion.querySelectorAll('.controlnet .input-accordion');
       const photopeaIframe = accordion.querySelector('.photopea-iframe');
       const photopeaContext = new PhotopeaContext(photopeaIframe, tabs);
 
       tabs.forEach(tab => {
         const photopeaChildTrigger = tab.querySelector('.cnet-photopea-child-trigger');
+        if (!photopeaChildTrigger) return;
         photopeaChildTrigger.addEventListener('click', async () => {
           if (!firstTimeUserPrompt()) return;
 
@@ -416,18 +426,23 @@
           }
         });
       });
-      accordion.querySelector('.photopea-fetch').addEventListener('click', () => photopeaContext.fetchFromControlNet(tabs));
-      accordion.querySelector('.photopea-send').addEventListener('click', () => {
+      fetchButton.addEventListener('click', () => photopeaContext.fetchFromControlNet(tabs));
+      sendButton.addEventListener('click', () => {
         photopeaContext.sendToControlNet(tabs)
         closeModalButton.click();
       });
+      return true;
     }
 
     const accordions = gradioApp().querySelectorAll('#controlnet');
     accordions.forEach(accordion => {
       if (cnetRegisteredAccordions.has(accordion)) return;
-      registerCallbacks(accordion);
-      cnetRegisteredAccordions.add(accordion);
+      // Only remember the accordion once it was fully wired. A partial mount
+      // returns false here so the next UI update retries instead of leaving it
+      // half-registered.
+      if (registerCallbacks(accordion)) {
+        cnetRegisteredAccordions.add(accordion);
+      }
     });
   }
 
