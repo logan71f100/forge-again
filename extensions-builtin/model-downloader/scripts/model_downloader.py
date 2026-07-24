@@ -1,6 +1,7 @@
 import html
 import os
 import re
+import shutil
 import threading
 import time
 import urllib.parse
@@ -546,6 +547,134 @@ def clear_queue():
     return _render_queue()
 
 
+# --------------------------------------------------------- installed models
+#
+# Auto-sorting can only guess when a filename is ambiguous, so being able to
+# move a model to the right folder afterwards matters as much as getting the
+# download right.
+
+MODEL_EXTS = (".safetensors", ".ckpt", ".gguf", ".pt", ".pth", ".bin", ".sft")
+
+
+def _installed_models():
+    """{category: [(filename, size, fullpath)]} for everything on disk."""
+    out = {}
+    for cat, d in _category_dirs().items():
+        if not d or not os.path.isdir(d):
+            continue
+        files = []
+        for fn in sorted(os.listdir(d)):
+            p = os.path.join(d, fn)
+            if not os.path.isfile(p) or fn.startswith("."):
+                continue
+            if not fn.lower().endswith(MODEL_EXTS):
+                continue
+            try:
+                files.append((fn, os.path.getsize(p), p))
+            except OSError:
+                pass
+        if files:
+            out[cat] = files
+    return out
+
+
+def _model_choices():
+    """(label, value) pairs; value is "category::filename"."""
+    choices = []
+    for cat, files in _installed_models().items():
+        for fn, size, _p in files:
+            choices.append((f"[{cat}] {fn}  ({_fmt_size(size)})", f"{cat}::{fn}"))
+    return choices
+
+
+def _resolve_selection(value):
+    """"category::filename" -> (category, filename, verified path).
+
+    Rejects anything that would resolve outside its category directory, so a
+    crafted value can't reach arbitrary files.
+    """
+    cat, _, fn = (value or "").partition("::")
+    dirs = _category_dirs()
+    if cat not in dirs or not fn:
+        raise ValueError(f"unknown selection: {value!r}")
+    base = os.path.abspath(dirs[cat])
+    path = os.path.abspath(os.path.join(base, fn))
+    if os.path.dirname(path) != base or not os.path.isfile(path):
+        raise ValueError(f"not a file in {cat}: {fn}")
+    return cat, os.path.basename(path), path
+
+
+def refresh_installed():
+    choices = _model_choices()
+    total = sum(sz for files in _installed_models().values() for _f, sz, _p in files)
+    summary = f"**{len(choices)} model file(s)** on disk — {_fmt_size(total)} total"
+    return gr.update(choices=choices, value=[]), summary
+
+
+def move_models(selected, target_category):
+    """Move files into another category folder (e.g. an XL checkpoint into sd/)."""
+    if not selected:
+        return "<p>Select at least one model first.</p>", *refresh_installed()
+    if not target_category:
+        return "<p>Pick a destination first.</p>", *refresh_installed()
+
+    dirs = _category_dirs()
+    dest_dir = dirs.get(target_category)
+    if not dest_dir:
+        return f"<p>Unknown destination: {html.escape(str(target_category))}</p>", *refresh_installed()
+    os.makedirs(dest_dir, exist_ok=True)
+
+    lines, touched = [], set()
+    for value in selected:
+        try:
+            cat, fn, src = _resolve_selection(value)
+            if cat == target_category:
+                lines.append(f"⏭ {html.escape(fn)} — already in {html.escape(cat)}")
+                continue
+            dst = os.path.join(dest_dir, fn)
+            if os.path.exists(dst):
+                lines.append(f"⚠ {html.escape(fn)} — a file with that name is already in {html.escape(target_category)}; left alone")
+                continue
+            shutil.move(src, dst)
+            lines.append(f"✅ {html.escape(fn)} — {html.escape(cat)} → {html.escape(target_category)}")
+            touched.update((cat, target_category))
+        except Exception as e:
+            lines.append(f"❌ {html.escape(str(value))} — {html.escape(str(e))}")
+
+    if touched:
+        _refresh_lists(touched)
+    body = "".join(f"<div>{l}</div>" for l in lines)
+    return f"<div style='font-family:monospace;line-height:1.6'>{body}</div>", *refresh_installed()
+
+
+def delete_models(selected, confirm):
+    """Permanently delete the selected files. Gated behind an explicit tick."""
+    if not selected:
+        return "<p>Select at least one model first.</p>", *refresh_installed()
+    if not confirm:
+        return ("<p>⚠ Deleting is permanent. Tick <b>Yes, delete permanently</b> "
+                "next to the button to confirm.</p>", *refresh_installed())
+
+    lines, touched, freed = [], set(), 0
+    for value in selected:
+        try:
+            cat, fn, path = _resolve_selection(value)
+            size = os.path.getsize(path)
+            os.remove(path)
+            freed += size
+            touched.add(cat)
+            lines.append(f"🗑 {html.escape(fn)} — deleted from {html.escape(cat)} ({_fmt_size(size)})")
+        except Exception as e:
+            lines.append(f"❌ {html.escape(str(value))} — {html.escape(str(e))}")
+
+    if touched:
+        _refresh_lists(touched)
+    if freed:
+        lines.append(f"<b>{_fmt_size(freed)} freed</b>")
+    body = "".join(f"<div>{l}</div>" for l in lines)
+    return f"<div style='font-family:monospace;line-height:1.6'>{body}</div>", *refresh_installed()
+
+
 # ------------------------------------------------- top models per mode
 
 MODE_FILTERS = {
@@ -695,6 +824,31 @@ def on_ui_tabs():
             refresh_q = gr.Button("🔄 Refresh", elem_id="model_downloader_refresh_queue")
         status = gr.HTML(value=_render_queue(), elem_id="model_downloader_status")
 
+        with gr.Accordion("Installed models — move or delete", open=False, elem_id="model_downloader_manage"):
+            manage_summary = gr.Markdown("Press **Refresh list** to see what's on disk.")
+            installed = gr.Dropdown(
+                label="Installed models (select one or more)",
+                choices=[], value=[], multiselect=True,
+                elem_id="model_downloader_installed",
+            )
+            with gr.Row():
+                refresh_installed_btn = gr.Button("🔄 Refresh list", elem_id="model_downloader_refresh_installed")
+                move_target = gr.Dropdown(
+                    label="Move to",
+                    choices=list(_category_dirs().keys()),
+                    value=None,
+                    elem_id="model_downloader_move_target",
+                )
+                move_btn = gr.Button("Move", variant="primary", elem_id="model_downloader_move")
+            with gr.Row():
+                confirm_delete = gr.Checkbox(
+                    label="Yes, delete permanently",
+                    value=False,
+                    elem_id="model_downloader_confirm_delete",
+                )
+                delete_btn = gr.Button("🗑 Delete selected", variant="stop", elem_id="model_downloader_delete")
+            manage_status = gr.HTML(elem_id="model_downloader_manage_status")
+
         top_title = gr.Markdown("**Top checkpoints on Hugging Face** — press refresh to load", elem_id="model_downloader_top_title")
         top_urls_state = gr.State([])
         top_rows, top_buttons = [], []
@@ -718,6 +872,15 @@ def on_ui_tabs():
         stop.click(fn=cancel_download, outputs=[status], show_progress="hidden")
         clear_done.click(fn=clear_finished, outputs=[status], show_progress="hidden")
         refresh_q.click(fn=queue_stream, outputs=[status], show_progress="hidden")
+
+        refresh_installed_btn.click(
+            fn=refresh_installed, outputs=[installed, manage_summary], show_progress="hidden")
+        move_btn.click(
+            fn=move_models, inputs=[installed, move_target],
+            outputs=[manage_status, installed, manage_summary], show_progress="hidden")
+        delete_btn.click(
+            fn=delete_models, inputs=[installed, confirm_delete],
+            outputs=[manage_status, installed, manage_summary], show_progress="hidden")
         refresh_top.click(
             fn=refresh_top_models,
             outputs=[top_title, *top_rows, top_urls_state, *top_buttons],
