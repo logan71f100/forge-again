@@ -226,6 +226,8 @@ def connect_paste_params_buttons(only_tabname=None, bindings=None):
             inputs=None,
             outputs=None,
             show_progress=False,
+            queue=False,   # pure-JS (fn=None) handler: gradio 6 only runs it off the
+                           # unqueued path -- without this the tab never switched.
         )
 
 
