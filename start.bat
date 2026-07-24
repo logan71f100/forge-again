@@ -118,8 +118,16 @@ if not exist "%VENV%\Scripts\python.exe" (
 rem The stamp records a fingerprint of requirements_versions.txt, not just "ok".
 rem With a boolean stamp an upgraded install never re-ran pip, so dependency
 rem changes (including security bumps) only ever reached fresh installs.
+rem Capture via a temp file, NOT `for /f (' "..exe" .. ')`: for/f runs its
+rem command through cmd/c, which strips the outer quotes, so a venv path with a
+rem space (e.g. "C:\Stable Diffusion\...") split the command and REQHASH came
+rem back empty -- the stamp then held "ECHO is off." and deps reinstalled on
+rem every launch (issue #7). Have Python write the hash; read it with set /p.
 set "REQHASH="
-for /f "delims=" %%H in ('"%VENV%\Scripts\python.exe" -c "import hashlib;print(hashlib.sha256(open(r'%~dp0requirements_versions.txt','rb').read()).hexdigest()[:16])" 2^>nul') do set "REQHASH=%%H"
+set "REQHASHFILE=%VENV%\.reqhash.tmp"
+"%VENV%\Scripts\python.exe" -c "import hashlib,io;open(r'%REQHASHFILE%','w').write(hashlib.sha256(open(r'%~dp0requirements_versions.txt','rb').read()).hexdigest()[:16])" 2>nul
+if exist "%REQHASHFILE%" set /p REQHASH=<"%REQHASHFILE%"
+if exist "%REQHASHFILE%" del "%REQHASHFILE%" >nul 2>&1
 
 set "NEEDDEPS=1"
 if exist "%STAMP%" if defined REQHASH findstr /x /c:"%REQHASH%" "%STAMP%" >nul 2>&1 && set "NEEDDEPS="
@@ -132,7 +140,7 @@ if defined NEEDDEPS (
     "%VENV%\Scripts\python.exe" -m pip install %TORCH_CMD% || goto :fail
     echo [bootstrap] Installing requirements ...
     "%VENV%\Scripts\python.exe" -m pip install --no-build-isolation -r "%~dp0requirements_versions.txt" || goto :fail
-    echo %REQHASH%> "%STAMP%"
+    if defined REQHASH (>"%STAMP%" echo %REQHASH%) else (>"%STAMP%" echo unknown)
     echo [bootstrap] Environment ready.
 )
 

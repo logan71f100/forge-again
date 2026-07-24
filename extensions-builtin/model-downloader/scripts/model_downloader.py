@@ -205,6 +205,18 @@ def _download_one(url, dest_dir, hf_token, log_progress):
         total = int(probe.headers.get("Content-Length") or 0)
         accepts_ranges = probe.headers.get("Accept-Ranges") == "bytes"
 
+        # A *model page* URL (e.g. a civitai/HF page rather than a file link)
+        # returns HTTP 200 with an HTML body. raise_for_status() passes it, and
+        # without this it was written into the models folder as a "checkpoint"
+        # and auto-sorted (issue #9). Reject HTML by content-type up front; the
+        # first-bytes sniff below catches a lying/absent content-type too.
+        ctype = (probe.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype in ("text/html", "application/xhtml+xml"):
+            raise ValueError(
+                "the link returned an HTML web page, not a file — this looks like a "
+                "model *page* URL. Use the direct file/download link (or a Civitai/HF "
+                "model URL, which is resolved automatically).")
+
         os.makedirs(dest_dir, exist_ok=True)
         dest = os.path.join(dest_dir, name)
         if os.path.exists(dest):
@@ -228,11 +240,24 @@ def _download_one(url, dest_dir, hf_token, log_progress):
         done = have
         started = time.time()
         last_report = 0.0
+        first = have == 0     # only sniff the very first bytes of a fresh file
         try:
             with open(part, mode) as f:
                 for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                     if _cancel.is_set():
                         return name, dest, "cancelled — partial file kept for resume"
+                    if first:
+                        first = False
+                        head = chunk[:64].lstrip().lower()
+                        if head.startswith((b"<!doctype", b"<html", b"<?xml", b"<head")):
+                            f.close()
+                            try:
+                                os.remove(part)
+                            except OSError:
+                                pass
+                            raise ValueError(
+                                "the download started with an HTML page, not model data "
+                                "— refusing to save it as a model. Use the direct file link.")
                     f.write(chunk)
                     done += len(chunk)
                     now = time.time()

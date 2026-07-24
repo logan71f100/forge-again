@@ -164,8 +164,16 @@ class ForgeCanvas:
             canvas_html_uuid = canvas_html_uuid + marker
 
         self.block = gr.HTML(canvas_html_uuid, visible=visible, elem_id=elem_id, elem_classes=elem_classes)
-        self.foreground = LogicalImage(visible=DEBUG_MODE, label='foreground', numpy=numpy, elem_id=self.uuid, elem_classes=['logical_image_foreground'])
-        self.background = LogicalImage(visible=DEBUG_MODE, label='background', numpy=numpy, value=initial_image, elem_id=self.uuid, elem_classes=['logical_image_background'])
+        # The canvas JS syncs the drawn/uploaded image into these hidden textboxes
+        # (which become the component value the backend reads). gradio 6 does NOT
+        # mount visible=False components, so with the old visible=DEBUG_MODE they
+        # were absent from the DOM entirely -- the canvas had nothing to write to,
+        # and every image input (img2img, inpaint, Replacer) silently sent None,
+        # crashing with "'NoneType' has no attribute 'mode'". Mount them CSS-hidden
+        # via webui-hidden-mounted instead (unless DEBUG_MODE wants them visible).
+        _hide = [] if DEBUG_MODE else ['webui-hidden-mounted']
+        self.foreground = LogicalImage(visible=True, label='foreground', numpy=numpy, elem_id=self.uuid, elem_classes=['logical_image_foreground'] + _hide)
+        self.background = LogicalImage(visible=True, label='background', numpy=numpy, value=initial_image, elem_id=self.uuid, elem_classes=['logical_image_background'] + _hide)
         if not lazy:
             Context.root_block.load(None, js=f'async ()=>{{new ForgeCanvas("{self.uuid}", {no_upload}, {no_scribbles}, {contrast_scribbles}, {height}, '
                                              f"'{scribble_color}', {scribble_color_fixed}, {scribble_width}, {scribble_width_fixed}, "

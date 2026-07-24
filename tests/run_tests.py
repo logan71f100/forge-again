@@ -1392,6 +1392,38 @@ def check_ui_regression() -> None:
             except Exception as e:
                 record("ui: resize-mode radio responds", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
 
+            # --- the img2img canvas must sync an upload to the backend -------
+            # ForgeCanvas writes the uploaded image into a hidden LogicalImage
+            # textbox that becomes the component value. gradio 6 doesn't mount
+            # visible=False, so that textbox was absent and EVERY canvas image
+            # input (img2img, inpaint, Replacer) silently sent None -> the
+            # "'NoneType' has no attribute 'mode'" crash on generate. API tests
+            # miss this (they pass init_images directly), so drive the canvas.
+            try:
+                import base64 as _b64, io as _io
+                from PIL import Image as _Image
+                tmpimg = os.path.join(tempfile.gettempdir(), "forge_ui_canvas_probe.png")
+                _Image.new("RGB", (128, 128), (40, 160, 90)).save(tmpimg)
+                fi = page.query_selector("#img2img_image input[type=file]")
+                if not fi:
+                    record("ui: img2img canvas syncs an upload", FAIL, "no file input on the canvas")
+                else:
+                    fi.set_input_files(tmpimg)
+                    page.wait_for_timeout(3500)
+                    blen = page.evaluate(
+                        "() => { const t = document.querySelector('.logical_image_background textarea');"
+                        " return t ? (t.value || '').length : -1; }")
+                    if blen < 0:
+                        record("ui: img2img canvas syncs an upload", FAIL,
+                               "the LogicalImage textbox isn't mounted -- the image can't reach the backend")
+                    elif blen == 0:
+                        record("ui: img2img canvas syncs an upload", FAIL,
+                               "upload didn't sync into the canvas value (backend would get None)")
+                    else:
+                        record("ui: img2img canvas syncs an upload", PASS, f"value {blen} bytes")
+            except Exception as e:
+                record("ui: img2img canvas syncs an upload", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
             # --- no JS errors ------------------------------------------------
             # A broad net for gradio-6 breakage that still renders.
             # Known, pre-existing errors: page-load callbacks that dereference

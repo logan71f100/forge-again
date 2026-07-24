@@ -101,6 +101,38 @@ class InterrogateModels:
 
     def load_blip_model(self):
         self.create_fake_fairscale()
+
+        # The bundled BLIP (repositories/BLIP/models/med.py) does
+        #   from transformers.modeling_utils import (apply_chunking_to_forward,
+        #       find_pruneable_heads_and_indices, prune_linear_layer, ...)
+        # but transformers 5 moved apply_chunking_to_forward and prune_linear_layer
+        # to transformers.pytorch_utils and removed find_pruneable_heads_and_indices
+        # outright -- so CLIP interrogate crashed with ImportError. Restore the
+        # old import path: re-export the two that moved, and provide the removed
+        # one from its historical (stable) implementation.
+        import transformers.modeling_utils as _mu
+        import transformers.pytorch_utils as _pu
+
+        def _find_pruneable_heads_and_indices(heads, n_heads, head_size, already_pruned_heads):
+            mask = torch.ones(n_heads, head_size)
+            heads = set(heads) - already_pruned_heads
+            for head in heads:
+                head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
+                mask[head] = 0
+            mask = mask.view(-1).contiguous().eq(1)
+            index = torch.arange(len(mask))[mask].long()
+            return heads, index
+
+        _compat = {
+            "apply_chunking_to_forward": getattr(_pu, "apply_chunking_to_forward", None),
+            "prune_linear_layer": getattr(_pu, "prune_linear_layer", None),
+            "find_pruneable_heads_and_indices": getattr(
+                _pu, "find_pruneable_heads_and_indices", _find_pruneable_heads_and_indices),
+        }
+        for _name, _fn in _compat.items():
+            if not hasattr(_mu, _name) and _fn is not None:
+                setattr(_mu, _name, _fn)
+
         import models.blip
 
         files = modelloader.load_models(
