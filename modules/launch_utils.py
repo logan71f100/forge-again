@@ -67,10 +67,14 @@ Use --skip-python-version-check to suppress this warning.
 """)
 
 
+# A release-zip install has no .git, so these probes fail by design and
+# "<none>" is the correct answer. Without DEVNULL git also writes
+# "fatal: not a git repository" straight to the console on every startup,
+# which reads like a real error immediately above the version banner.
 @lru_cache()
 def commit_hash():
     try:
-        return subprocess.check_output([git, "-C", script_path, "rev-parse", "HEAD"], shell=False, encoding='utf8').strip()
+        return subprocess.check_output([git, "-C", script_path, "rev-parse", "HEAD"], shell=False, encoding='utf8', stderr=subprocess.DEVNULL).strip()
     except Exception:
         return "<none>"
 
@@ -78,7 +82,7 @@ def commit_hash():
 @lru_cache()
 def git_tag_a1111():
     try:
-        return subprocess.check_output([git, "-C", script_path, "describe", "--tags"], shell=False, encoding='utf8').strip()
+        return subprocess.check_output([git, "-C", script_path, "describe", "--tags"], shell=False, encoding='utf8', stderr=subprocess.DEVNULL).strip()
     except Exception:
         try:
 

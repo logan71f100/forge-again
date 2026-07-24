@@ -165,6 +165,21 @@ def check_dependency_conflicts() -> None:
         record("deps: no conflicts", PASS, f"{len(out.splitlines())} accepted conflict(s) ignored")
 
 
+def check_pins_hold() -> None:
+    """Installed versions still match the `==` pins.
+
+    Extension installers run on every startup and can pull pinned packages past
+    their documented caps, so this drifts silently on a working machine.
+    """
+    proc = run([venv_python(), "check_pins.py", "--check"])
+    out = (proc.stdout + proc.stderr).strip()
+    if proc.returncode == 0:
+        record("deps: installed versions match the pins", PASS)
+    else:
+        record("deps: installed versions match the pins", FAIL,
+               out[:400] or "check_pins.py reported drift")
+
+
 def check_json_and_bom() -> None:
     """JSON must parse strictly and must NOT carry a UTF-8 BOM.
 
@@ -697,6 +712,109 @@ def check_gpu_generation() -> None:
 # start.bat exited silently. These guard the fresh-install path.
 # --------------------------------------------------------------------------
 
+def check_release_install_boots() -> None:
+    """Boot the server from a `git archive` export -- no .git, no dev files.
+
+    This is what somebody who downloads a release actually runs, and it is a
+    genuinely different environment from the working tree: code that reaches
+    for git metadata behaves differently, and export-ignore'd files are gone.
+    Nothing else in the suite covers it.
+    """
+    export = tempfile.mkdtemp(prefix="forge-release-test-")
+    try:
+        tar = os.path.join(export, "src.tar")
+        proc = run(["git", "archive", "--format=tar", "-o", tar, "HEAD"])
+        if proc.returncode != 0:
+            record("clean: release export boots", SKIP, "git archive failed")
+            return
+        src = os.path.join(export, "src")
+        os.makedirs(src, exist_ok=True)
+        import tarfile
+        with tarfile.open(tar) as t:
+            t.extractall(src)
+        os.remove(tar)
+
+        if os.path.exists(os.path.join(src, ".git")):
+            record("clean: release export boots", FAIL, "export unexpectedly contains .git")
+            return
+
+        settings = os.path.join(export, "config.json")
+        open(settings, "w", encoding="utf-8").write("{}")
+        models = os.environ.get("FORGE_MODELS_DIR", os.path.join(ROOT, "models"))
+
+        env = dict(os.environ)
+        env.update(FORGE_NO_LLM="1", FORGE_NO_CONTROLNET="1",
+                   SD_WEBUI_RESTARTING="1", PYTHONUNBUFFERED="1")
+
+        port = free_port(7930)
+        cmd = [venv_python(), "launch.py", "--port", str(port), "--api",
+               "--skip-install", "--skip-python-version-check",
+               "--ui-settings-file", settings,
+               "--ui-config-file", os.path.join(export, "ui-config.json"),
+               "--ckpt-dir", os.path.join(models, "checkpoints", "xl")]
+
+        p = subprocess.Popen(cmd, cwd=src, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True,
+                             encoding="utf-8", errors="replace")
+        log: list[str] = []
+        import threading
+        threading.Thread(target=lambda: [log.append(l.rstrip("\n")) for l in p.stdout],
+                         daemon=True).start()
+
+        booted = False
+        start = time.time()
+        while time.time() - start < 300:
+            if p.poll() is not None:
+                break
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/internal/ping", timeout=2):
+                    booted = True
+                    break
+            except Exception:
+                time.sleep(2)
+        p.terminate()
+        try:
+            p.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        time.sleep(1)
+
+        if not booted:
+            record("clean: release export boots", FAIL,
+                   "server never came up from a release export:\n         "
+                   + "\n         ".join(log[-12:]))
+            return
+        # NOTE: this exports committed HEAD, not the working tree -- it answers
+        # "would what we are about to merge work", which is the point of a gate.
+        # An uncommitted fix will look like it is still broken here.
+        record("clean: release export boots", PASS, "committed HEAD, no .git, no dev files")
+
+        tb = [i for i, l in enumerate(log) if l.startswith("Traceback")]
+        # "fatal: not a git repository" is git's own stderr leaking through the
+        # version probe. Harmless, but it reads as an error on every startup of
+        # every release-zip install, so it must not come back.
+        gitish = [l for l in log
+                  if "InvalidGitRepositoryError" in l
+                  or "git info" in l.lower()
+                  or "not a git repository" in l.lower()]
+        if tb or gitish:
+            detail = []
+            if gitish:
+                detail.append("git-metadata errors without a .git dir:")
+                detail += gitish[:4]
+            for i in tb[:2]:
+                detail.append("\n         ".join(log[i:i + 5]))
+            record("clean: release export starts without git errors", FAIL,
+                   "\n         ".join(detail))
+        else:
+            record("clean: release export starts without git errors", PASS,
+                   f"{len(log)} log lines, no tracebacks")
+    except Exception as e:
+        record("clean: release export boots", FAIL, f"{type(e).__name__}: {str(e)[:200]}")
+    finally:
+        shutil.rmtree(export, ignore_errors=True)
+
+
 def check_launcher_guards() -> None:
     """The launchers must handle missing git and must not swallow failures."""
     bat = open(os.path.join(ROOT, "start.bat"), encoding="utf-8", errors="replace").read()
@@ -814,6 +932,7 @@ CHECKS = {
     "static": [
         ("syntax", check_syntax),
         ("deps", check_dependency_conflicts),
+        ("pins", check_pins_hold),
         ("json", check_json_and_bom),
         ("eol", check_line_endings),
         ("privacy", check_no_personal_files_tracked),
@@ -827,6 +946,7 @@ CHECKS = {
     "clean": [
         ("guards", check_launcher_guards),
         ("urls", check_bootstrap_urls),
+        ("release", check_release_install_boots),
         ("gitboot", check_git_bootstrap_works),
     ],
 }

@@ -115,16 +115,31 @@ if not exist "%VENV%\Scripts\python.exe" (
     "%PYDIR%\python.exe" -m venv "%VENV%" || goto :fail
 )
 
-if not exist "%STAMP%" (
+rem The stamp records a fingerprint of requirements_versions.txt, not just "ok".
+rem With a boolean stamp an upgraded install never re-ran pip, so dependency
+rem changes (including security bumps) only ever reached fresh installs.
+set "REQHASH="
+for /f "delims=" %%H in ('"%VENV%\Scripts\python.exe" -c "import hashlib;print(hashlib.sha256(open(r'%~dp0requirements_versions.txt','rb').read()).hexdigest()[:16])" 2^>nul') do set "REQHASH=%%H"
+
+set "NEEDDEPS=1"
+if exist "%STAMP%" if defined REQHASH findstr /x /c:"%REQHASH%" "%STAMP%" >nul 2>&1 && set "NEEDDEPS="
+
+if defined NEEDDEPS (
+    if exist "%STAMP%" echo [bootstrap] requirements_versions.txt changed since last install -- updating ...
     echo [bootstrap] Upgrading pip ...
     "%VENV%\Scripts\python.exe" -m pip install --upgrade pip || goto :fail
     echo [bootstrap] Installing PyTorch for CUDA 12.6, large download ...
     "%VENV%\Scripts\python.exe" -m pip install %TORCH_CMD% || goto :fail
     echo [bootstrap] Installing requirements ...
     "%VENV%\Scripts\python.exe" -m pip install --no-build-isolation -r "%~dp0requirements_versions.txt" || goto :fail
-    echo ok> "%STAMP%"
+    echo %REQHASH%> "%STAMP%"
     echo [bootstrap] Environment ready.
 )
+
+rem Extension installers run on every startup and can pull pinned packages past
+rem their documented caps (onnxruntime wants protobuf>=4, open-clip-torch caps
+rem it <4). Restore any drift so the pins are self-correcting.
+"%VENV%\Scripts\python.exe" "%~dp0check_pins.py"
 
 rem --------------------------------------------------------------- configure
 rem Fatal: a failed mode write leaves the UI pointed at the wrong model folder.

@@ -75,16 +75,27 @@ if [ ! -x venv/bin/python ]; then
     python/bin/python3 -m venv venv || fail
 fi
 
-if [ ! -f venv/.deps_installed ]; then
+# The stamp records a fingerprint of requirements_versions.txt, not just "ok".
+# With a boolean stamp an upgraded install never re-ran pip, so dependency
+# changes (including security bumps) only ever reached fresh installs.
+REQHASH="$(venv/bin/python -c "import hashlib;print(hashlib.sha256(open('requirements_versions.txt','rb').read()).hexdigest()[:16])" 2>/dev/null || true)"
+
+if [ ! -f venv/.deps_installed ] || [ -z "$REQHASH" ] || ! grep -qx "$REQHASH" venv/.deps_installed 2>/dev/null; then
+    [ -f venv/.deps_installed ] && echo "[bootstrap] requirements_versions.txt changed since last install -- updating ..."
     echo "[bootstrap] Upgrading pip ..."
     venv/bin/python -m pip install --upgrade pip || fail
     echo "[bootstrap] Installing PyTorch for CUDA 12.6, large download ..."
     venv/bin/python -m pip install torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126 || fail
     echo "[bootstrap] Installing requirements ..."
     venv/bin/python -m pip install --no-build-isolation -r requirements_versions.txt || fail
-    echo ok > venv/.deps_installed
+    echo "$REQHASH" > venv/.deps_installed
     echo "[bootstrap] Environment ready."
 fi
+
+# Extension installers run on every startup and can pull pinned packages past
+# their documented caps (onnxruntime wants protobuf>=4, open-clip-torch caps it
+# <4). Restore any drift so the pins are self-correcting.
+venv/bin/python check_pins.py
 
 # --------------------------------------------------------------- configure
 # Fatal: a failed mode write leaves the UI pointed at the wrong model folder.
