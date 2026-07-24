@@ -1424,6 +1424,110 @@ def check_ui_regression() -> None:
             except Exception as e:
                 record("ui: img2img canvas syncs an upload", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
 
+            # --- detect-image-size must read the real dimensions -------------
+            # The 📐 button (currentImg2imgSourceResolution in ui.js) used the
+            # legacy A1111 selector 'div[style="display: block;"]'. gradio 6
+            # renders the active img2img panel as display:flex, never block, so
+            # the selector matched nothing and the handler set Width+Height to 0
+            # (issue #11-b). Uses the 128x128 upload synced by the test above.
+            try:
+                fi = page.query_selector("#img2img_image input[type=file]")
+                if fi:
+                    page.click("#img2img_detect_image_size_btn", timeout=10000)
+                    page.wait_for_timeout(1200)
+                    wh = page.evaluate(
+                        "() => { const w=document.querySelector('#img2img_width input');"
+                        " const h=document.querySelector('#img2img_height input');"
+                        " return [w?parseFloat(w.value):-1, h?parseFloat(h.value):-1]; }")
+                    if wh[0] == 128 and wh[1] == 128:
+                        record("ui: img2img detect-size reads dimensions", PASS, f"{wh[0]}x{wh[1]}")
+                    else:
+                        record("ui: img2img detect-size reads dimensions", FAIL,
+                               f"expected 128x128 from the upload, got {wh[0]}x{wh[1]} "
+                               "(0 => the source-image selector matched nothing)")
+                else:
+                    record("ui: img2img detect-size reads dimensions", FAIL, "no canvas file input")
+            except Exception as e:
+                record("ui: img2img detect-size reads dimensions", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
+            # --- switching UI mode must refresh the checkpoint list ----------
+            # forge_ui_preset.change repoints the checkpoint scan dir to the
+            # mode's subfolder and refreshes the dropdown; gradio 6 drops a
+            # repeated .change -> Dropdown update, so main_entry wires delayed
+            # refresh-button clicks to make every switch land (issue #11).
+            # Guard the FULL user flow with real clicks: switch away and back,
+            # asserting the list and the selected value turn over both times.
+            # Ends on the mode the server started in -- the switch writes the
+            # PROJECT's mode files, so the check must leave them as found.
+            try:
+                start_mode = session.mode
+                other_mode = "xl" if start_mode != "xl" else "sd"
+
+                def _ckpt_value():
+                    return page.evaluate(
+                        "() => { const i=document.querySelector('.model_selection input');"
+                        " return i ? (i.value||'') : ''; }")
+
+                def _ckpt_options():
+                    # real user click; gradio renders the open listbox as a global
+                    # ul.options NOT nested under .model_selection, so match globally
+                    # (only one dropdown is open at a time).
+                    page.click(".model_selection input", timeout=15000)
+                    page.wait_for_timeout(1200)
+                    o = page.evaluate(
+                        "() => [...document.querySelectorAll('.options .item, ul[role=listbox] li')]"
+                        ".map(x=>x.textContent.trim().replace(/^\\u2713\\s*/,''))")
+                    page.keyboard.press("Escape"); page.wait_for_timeout(400)
+                    return set(x for x in o if x)
+
+                def _switch(mode):
+                    # real click on the radio label; wait past the delayed refresh
+                    # clicks (2.5s + 6s) that land the dropdown update.
+                    page.click(f"#forge_ui_preset label:has(input[value='{mode}'])", timeout=15000)
+                    page.wait_for_timeout(9000)
+                    checked = page.evaluate(
+                        "() => { const r=[...document.querySelectorAll('#forge_ui_preset input[type=radio]')];"
+                        " const c=r.find(x=>x.checked); return c?c.value:'?'; }")
+                    return _ckpt_value(), _ckpt_options(), checked
+
+                # The fixture config's forge_preset can differ from the server's
+                # actual --ckpt-dir mode, leaving the radio pre-checked on a mode
+                # the server isn't in. Clicking an already-checked radio fires no
+                # .change, so align the radio to the server's mode first -- that
+                # click IS a real transition whenever they disagree, and a no-op
+                # skip when they already agree.
+                radio_now = page.evaluate(
+                    "() => { const r=[...document.querySelectorAll('#forge_ui_preset input[type=radio]')];"
+                    " const c=r.find(x=>x.checked); return c?c.value:'?'; }")
+                if radio_now != start_mode:
+                    _switch(start_mode)
+
+                away_val, away_opts, away_radio = _switch(other_mode)
+                back_val, back_opts, back_radio = _switch(start_mode)
+
+                problems = []
+                if not away_opts or not back_opts:
+                    problems.append(f"a mode's list read empty ({other_mode}={len(away_opts)}, {start_mode}={len(back_opts)})")
+                if away_opts and back_opts and away_opts & back_opts:
+                    problems.append(f"checkpoints leaked across modes: {sorted(away_opts & back_opts)[:3]}")
+                if away_val and away_val not in away_opts:
+                    problems.append(f"after ->{other_mode} the selected value {away_val!r} is not in that mode's list (stale)")
+                if back_val and back_val not in back_opts:
+                    problems.append(f"after ->{start_mode} the selected value {back_val!r} is not in that mode's list (stale)")
+                if problems:
+                    srv = [l for l in s.log[-40:] if "mode-switch" in l or "Model selected" in l]
+                    record("ui: mode switch refreshes checkpoint list", FAIL,
+                           "; ".join(problems) +
+                           f" || ->{other_mode}: radio={away_radio} val={away_val!r} opts({len(away_opts)})={sorted(away_opts)[:4]}"
+                           f" || ->{start_mode}: radio={back_radio} val={back_val!r} opts({len(back_opts)})={sorted(back_opts)[:4]}"
+                           f" || server: {' / '.join(x[:90] for x in srv[-4:])}")
+                else:
+                    record("ui: mode switch refreshes checkpoint list", PASS,
+                           f"{start_mode}->{other_mode}->{start_mode}: {len(away_opts)}/{len(back_opts)} model(s), "
+                           "value tracks mode both ways")
+            except Exception as e:
+                record("ui: mode switch refreshes checkpoint list", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
             # --- no JS errors ------------------------------------------------
             # A broad net for gradio-6 breakage that still renders.
             # Known, pre-existing errors: page-load callbacks that dereference

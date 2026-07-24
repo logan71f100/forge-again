@@ -357,13 +357,19 @@ def forge_main_entry():
             return None
         return [full[i] for i in _valid_target_idx]
 
-    # IN-PLACE mode switch (no restart, no page reload). Two chained handlers on the
-    # same trigger, run in registration order:
+    # IN-PLACE mode switch (no restart, no page reload). Handlers on the same
+    # trigger, run in registration order:
     #   1. preset_apply_and_refresh_checkpoint: writes files + pushes opts + repoints
     #      the checkpoint scan dir + hot-swaps the model, and returns the checkpoint
-    #      dropdown update (per-mode choices + this mode's default).
+    #      + VAE dropdown updates (per-mode choices + this mode's defaults).
+    #      NOTE (issue #11): this update is verified to land on every REAL (trusted)
+    #      radio click, including repeated switches -- the harness guards it
+    #      ("ui: mode switch refreshes checkpoint list"). Synthetic el.click()
+    #      events from scripts can exhibit dropped updates after the first switch;
+    #      only trusted clicks are supported.
     #   2. _on_preset_change_filtered: returns the main txt2img/img2img control updates,
     #      keyed off the forge_preset that handler #1 just set.
+    #   3. clickLoraRefresh: refilters the extra-networks tabs.
     ui_forge_preset.change(preset_apply_and_refresh_checkpoint, inputs=[ui_forge_preset], outputs=[ui_checkpoint, ui_vae], queue=False, show_progress=False)
     ui_forge_preset.change(_on_preset_change_filtered, inputs=[ui_forge_preset], outputs=output_targets, queue=False, show_progress=False)
     ui_forge_preset.change(js="clickLoraRefresh", fn=None, queue=False, show_progress=False)
@@ -426,7 +432,7 @@ def _apply_mode_inplace(mode):
         if cur:
             base = os.path.dirname(cur.rstrip('/\\'))
             shared.cmd_opts.ckpt_dir = os.path.join(base, mode)
-        ckpt_list, _ = refresh_models()   # rescans new dir; populates sd_models.checkpoints_list
+        ckpt_list, vae_list = refresh_models()   # rescans new dir; populates sd_models.checkpoints_list
 
         # hot-swap. Set the additional modules DIRECTLY to the mode's full paths
         # (flux's ae/clip_l/t5xxl live under the shared FORGE_MODELS_DIR, NOT under
@@ -446,23 +452,27 @@ def _apply_mode_inplace(mode):
         if ckpt_list:
             value = next((c for c in ckpt_list if c == m['ckpt'] or c.startswith(m['ckpt'])), m['ckpt'])
         vae_value = [os.path.basename(x) for x in m['mods']]
-        return ckpt_list, value, vae_value
+        return ckpt_list, value, vae_value, vae_list
     except Exception as _e:
         import traceback
         print("[mode-switch] in-place switch failed:", _e)
         traceback.print_exc()
-        return None, None, None
+        return None, None, None, None
 
 
 def preset_apply_and_refresh_checkpoint(preset=None):
     """ui_forge_preset.change handler #1: apply the mode in-place and return the
-    checkpoint + VAE dropdown updates. Runs before the main-component handler below."""
+    checkpoint + VAE dropdown updates. Runs before the main-component handler below.
+
+    Verified (harness "ui: mode switch refreshes checkpoint list") to land on
+    every real radio click, including repeated switches. Returns per-mode choices
+    AND the mode's default as the value so the selection tracks the mode."""
     if preset is None:
         return gr.update(), gr.update()
-    ckpt_list, default_ckpt, vae_value = _apply_mode_inplace(preset)
+    ckpt_list, default_ckpt, vae_value, vae_list = _apply_mode_inplace(preset)
     if ckpt_list is None:
         return gr.update(), gr.update()
-    return gr.update(choices=ckpt_list, value=default_ckpt), gr.update(value=vae_value)
+    return gr.update(choices=ckpt_list, value=default_ckpt), gr.update(choices=vae_list, value=vae_value)
 
 
 def on_preset_change(preset=None):

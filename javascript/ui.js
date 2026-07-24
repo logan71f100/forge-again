@@ -414,7 +414,14 @@ function selectVAE(vae) {
 }
 
 function currentImg2imgSourceResolution(w, h, r) {
-    var img = gradioApp().querySelector('#mode_img2img > div[style="display: block;"] :is(img, canvas)');
+    // gradio 6 renders the active img2img sub-tab panel with an inline
+    // `display: flex;` (inactive ones get `display: none;`), so the old
+    // `div[style="display: block;"]` match found nothing and this returned
+    // [0, 0] -- which is what set width/height to 0. Select the visible
+    // tabitem instead (anything not explicitly display:none) and read the
+    // ForgeCanvas background <img> inside it; the <img> comes before the
+    // drawing <canvas> in the DOM, so :is(img, canvas) picks the real image.
+    var img = gradioApp().querySelector('#mode_img2img > div.tabitem:not([style*="display: none"]) :is(img, canvas)');
     return img ? [img.naturalWidth || img.width, img.naturalHeight || img.height, r] : [0, 0, r];
 }
 
