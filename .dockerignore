@@ -1,0 +1,43 @@
+# Keep the build context small and free of host-specific or private state.
+# Everything here is either rebuilt in the image, mounted at runtime, or personal.
+
+.git
+.github
+
+# Host environments -- the image builds its own.
+venv/
+python/
+_pytmp/
+_venv312_install.log
+
+# Large runtime data: bind-mounted instead of baked in.
+models/
+outputs/
+output/
+log/
+tmp/
+
+# Personal / machine-local settings. config.json holds your prompt presets,
+# task guidance and checkpoint notes -- it must never enter an image.
+config.json
+ui-config.json
+extra-args.txt
+current_mode.txt
+styles.csv
+*.log
+
+# The prebuilt llama-server is a Windows CUDA build and cannot run in a Linux
+# container. The image builds its own from forge-llm/patches/ when asked.
+forge-llm/*.exe
+forge-llm/*.dll
+
+# Caches
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+
+# Docs and media aren't needed to run the app.
+docs/images/
+*.md
+!requirements_versions.txt

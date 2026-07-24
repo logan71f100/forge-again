@@ -1,0 +1,54 @@
+# =============================================================================
+# forge-again -- Linux + NVIDIA. Requires the NVIDIA Container Toolkit.
+#
+#   docker compose up -d          build (first run) and start
+#   docker compose logs -f        watch startup
+#   docker compose down           stop
+#
+# The UI is then on http://localhost:7860
+#
+# To enable the AI assistant, set WITH_ASSISTANT to 1 below and rebuild with
+# `docker compose build`. That compiles the patched llama-server from
+# forge-llm/patches/ (a long CUDA build) and pulls a ~18 GB vision model on
+# first start. Leave it at 0 for a much smaller image; Forge itself is
+# unaffected either way.
+# =============================================================================
+services:
+  forge:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        WITH_ASSISTANT: "0"
+        # Match your GPU: 75=Turing(20xx) 86=Ampere(30xx) 89=Ada(40xx) 120=Blackwell(50xx)
+        CUDA_ARCH: "75"
+    image: forge-again:latest
+    container_name: forge-again
+    ports:
+      - "7860:7860"
+    environment:
+      FORGE_PORT: "7860"
+      FORGE_MODELS_DIR: /app/models
+      FORGE_NO_BROWSER: "1"
+      # Startup mode: sd | xl | flux (switchable in the UI afterwards)
+      FORGE_MODE: xl
+      # Extra launch arguments, e.g. "--gradio-auth user:pass"
+      # FORGE_EXTRA_ARGS: ""
+    volumes:
+      # Your checkpoints etc. Keep these on the host -- they are large and must
+      # survive the container. See the README for the expected folder layout.
+      - ./models:/app/models
+      - ./outputs:/app/outputs
+      # Settings persist across restarts. Create the file first (`touch config.json`)
+      # or Docker will make a directory with that name.
+      - ./config.json:/app/config.json
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Model loading can briefly need more than the default 64 MB of shared memory.
+    shm_size: "2gb"
+    restart: unless-stopped

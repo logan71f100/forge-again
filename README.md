@@ -40,15 +40,27 @@ Everything upstream Forge / A1111 does — txt2img, img2img, inpainting/outpaint
 
 ## Quick start
 
+Pick your platform — each guide has its own setup steps, caveats and recommendations:
+
+| Platform | Guide | AI assistant | Status |
+|---|---|---|---|
+| **Windows** | [docs/install-windows.md](docs/install-windows.md) | prebuilt, works out of the box | primary dev/test platform |
+| **Docker** (Linux/WSL2 + NVIDIA) | [docs/install-docker.md](docs/install-docker.md) | opt-in, built from source in the image | verified end to end |
+| **Linux** (native) | [docs/install-linux.md](docs/install-linux.md) | opt-in, build from the included patch | shares the Windows logic, less tested |
+| **macOS** | [docs/install-macos.md](docs/install-macos.md) | build from patch; hibernate untested on Metal | best-effort, untested |
+
+The short version:
+
 ```
-git clone <this repo>
+git clone https://github.com/logan71f100/forge-again
 cd forge-again
 start.bat            # Windows        (optionally: start.bat sd|xl|flux)
 ./start.sh           # Linux
 ./start-macos.sh     # macOS (untested)
+docker compose up -d # Docker         (Linux/WSL2 + NVIDIA Container Toolkit)
 ```
 
-Each launcher is fully self-contained: on first run it downloads a portable Python 3.12, builds the venv, installs PyTorch and all dependencies (several GB), downloads the AI assistant's vision model (~18 GB, unless `FORGE_NO_LLM=1`), then starts the UI listening on `http://0.0.0.0:7860` (`--listen` is default; set `FORGE_PORT` to change the port, `FORGE_MODELS_DIR` to use an external models folder — default is `.\models`, and the LLM lands in `<models>\llm\`). A browser opens automatically (`FORGE_NO_BROWSER=1` to suppress). Re-runs skip completed steps and start in seconds.
+Each **native** launcher is fully self-contained: on first run it downloads a portable Python 3.12, builds the venv, installs PyTorch and all dependencies (several GB), downloads the AI assistant's vision model (~18 GB, unless `FORGE_NO_LLM=1`), then starts the UI listening on `http://0.0.0.0:7860` (`--listen` is default; set `FORGE_PORT` to change the port, `FORGE_MODELS_DIR` to use an external models folder — default is `.\models`, and the LLM lands in `<models>\llm\`). A browser opens automatically (`FORGE_NO_BROWSER=1` to suppress). Re-runs skip completed steps and start in seconds. The **Docker** image works differently — dependencies are baked in at build time, so the container starts in ~30 s with no bootstrap; see [docs/install-docker.md](docs/install-docker.md).
 
 You still supply your own Stable Diffusion checkpoints (see the layout below) — those are not downloaded for you.
 
