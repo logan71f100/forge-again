@@ -306,7 +306,16 @@ def train_stream(name, images_dir, base_model, init_text, token_count,
 
         yield render()
 
-        cmd = [_ot_python(), os.path.join("scripts", "train.py"), "--config-path", config_file]
+        # Pass an empty --preset-path so OneTrainer SKIPS its legacy config
+        # migrations (the arg's documented effect): our config is already in the
+        # current format, and running migrations on it crashes (KeyError in an
+        # old-format dtype migration). Empty preset + current-format config is
+        # the intended "no migration" path, and it won't break when OneTrainer
+        # adds future migration steps.
+        nopreset = os.path.join(run_dir, "nopreset.json")
+        json.dump({}, open(nopreset, "w", encoding="utf-8"))
+        cmd = [_ot_python(), os.path.join("scripts", "train.py"),
+               "--preset-path", nopreset, "--config-path", config_file]
         _proc = subprocess.Popen(cmd, cwd=OT_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True, encoding="utf-8", errors="replace")
 
@@ -323,6 +332,11 @@ def train_stream(name, images_dir, base_model, init_text, token_count,
 
         if _proc.returncode == 0 and os.path.exists(out_path):
             _log_lines.append(f"[train] ✅ done — embedding saved to {out_path}")
+            if _convert_for_forge(out_path, name, mode):
+                _log_lines.append("[train] converted to a Forge-loadable format.")
+            else:
+                _log_lines.append("[train] ⚠ saved in OneTrainer format but couldn't convert "
+                                  "to Forge's format automatically — see the log.")
             _refresh_embeddings()
             _log_lines.append("[train] embedding list refreshed; use it in a prompt as its filename.")
         else:
@@ -344,6 +358,53 @@ def stop_training():
         _proc.terminate()
         return "<p>Stopping the current training run…</p>"
     return "<p>Nothing is training right now.</p>"
+
+
+def _convert_for_forge(path, name, mode):
+    """Rewrite OneTrainer's embedding into a format Forge can load.
+
+    OneTrainer saves two keys (emp_params = input vector, emp_params_out = the
+    trained output vector). Forge's loader only accepts `string_to_param`, an
+    SDXL `clip_g`+`clip_l` pair, or a dict with exactly ONE tensor — so the raw
+    two-key file fails to load. We rewrite it in place:
+
+      * SD 1.5  -> a single-tensor dict {name: (vectors, 768)}   (diffuser-concept branch)
+      * SDXL    -> {clip_l: (vectors, 768), clip_g: (vectors, 1280)}
+
+    Returns True on success. Best-effort: on any surprise we leave the file
+    untouched and report it, rather than corrupting the output.
+    """
+    try:
+        from safetensors.torch import load_file, save_file
+        import torch
+        d = load_file(path)
+        vec = d.get("emp_params_out")           # the trained/EMA output vector
+        if vec is None:
+            vec = d.get("emp_params")
+        if vec is None:
+            # Already single-tensor or an unexpected layout — leave as-is.
+            return len(d) == 1
+        if vec.dim() == 1:
+            vec = vec.unsqueeze(0)
+
+        if mode == "xl":
+            # SDXL embeddings carry both encoders. OneTrainer concatenates them
+            # as (vectors, 768+1280); split back into Forge's clip_l / clip_g.
+            if vec.shape[-1] == 768 + 1280:
+                out = {"clip_l": vec[:, :768].clone(),
+                       "clip_g": vec[:, 768:].clone()}
+            elif "clip_l" in d and "clip_g" in d:
+                out = {"clip_l": d["clip_l"], "clip_g": d["clip_g"]}
+            else:
+                return False        # unknown SDXL layout; don't guess
+        else:
+            out = {name: vec}       # SD 1.5: single tensor, Forge accepts it
+
+        save_file({k: v.contiguous().to(torch.float32) for k, v in out.items()}, path)
+        return True
+    except Exception:
+        errors.report("forge-onetrainer: embedding conversion failed", exc_info=True)
+        return False
 
 
 def _refresh_embeddings():
