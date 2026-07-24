@@ -1,0 +1,38 @@
+{
+    "_comment": "Config fixture for the test harness. Values are deliberately NON-DEFAULT so the round-trip check proves the server actually read them rather than falling back. The harness copies this to a temp file before launching, so this file is never mutated and your personal config.json is never touched.",
+
+    "samples_format": "png",
+    "grid_format": "png",
+    "save_images_add_number": true,
+    "enable_pnginfo": true,
+    "CLIP_stop_at_last_layers": 2,
+    "eta_noise_seed_delta": 31337,
+    "img2img_fix_steps": true,
+    "return_grid": false,
+    "js_modal_lightbox": false,
+    "show_progressbar": true,
+    "live_previews_enable": false,
+    "multiple_tqdm": false,
+    "print_hypernet_extra": true,
+    "face_restoration_unload": true,
+    "upcast_attn": true,
+
+    "forge_ai_provider": "local",
+    "forge_ai_temperature": 0.42,
+    "forge_ai_max_tokens": 1234,
+    "forge_ai_auto_start": false,
+    "forge_ai_auto_unload": false,
+    "forge_ai_auto_restore": false,
+    "forge_ai_api_url": "http://127.0.0.1:59999",
+    "forge_ai_claude_model": "claude-sonnet-4-6",
+    "forge_ai_task_guidance": "TEST-HARNESS-GUIDANCE-SENTINEL",
+    "forge_ai_checkpoint_notes": "{}",
+
+    "replacer_detection_prompt_examples": "TEST-DETECTION-SENTINEL",
+    "replacer_positive_prompt_examples": "TEST-POSITIVE-SENTINEL",
+    "replacer_negative_prompt_examples": "TEST-NEGATIVE-SENTINEL",
+    "replacer_ad_batch_size": 3,
+    "replacer_ad_fragment_length": 7,
+    "replacer_ad_stride": 5,
+    "replacer_ad_overlap": 2
+}
