@@ -604,11 +604,62 @@ def _resolve_selection(value):
     return cat, os.path.basename(path), path
 
 
-def refresh_installed():
-    choices = _model_choices()
-    total = sum(sz for files in _installed_models().values() for _f, sz, _p in files)
-    summary = f"**{len(choices)} model file(s)** on disk — {_fmt_size(total)} total"
-    return gr.update(choices=choices, value=[]), summary
+def load_installed(filter_cat="All"):
+    """Rows for the table: [{value, name, category, size}], newest folders first."""
+    rows = []
+    for cat, files in _installed_models().items():
+        if filter_cat not in ("All", None) and cat != filter_cat:
+            continue
+        for fn, size, _p in files:
+            rows.append({"value": f"{cat}::{fn}", "name": fn,
+                         "category": cat, "size": _fmt_size(size), "bytes": size})
+    rows.sort(key=lambda r: (r["category"], r["name"].lower()))
+    return rows
+
+
+def installed_summary(rows):
+    total = sum(r["bytes"] for r in rows)
+    return f"**{len(rows)} model file(s)** — {_fmt_size(total)}"
+
+
+def move_one(value, target_category):
+    """Move a single file; returns (status_html, refreshed_rows)."""
+    try:
+        cat, fn, src = _resolve_selection(value)
+    except Exception as e:
+        return f"<span style='color:#e06c75'>{html.escape(str(e))}</span>", None
+    if not target_category or target_category == cat:
+        return "<span style='opacity:.7'>Pick a different destination first.</span>", None
+
+    dirs = _category_dirs()
+    dest_dir = dirs.get(target_category)
+    if not dest_dir:
+        return f"<span style='color:#e06c75'>unknown destination</span>", None
+    os.makedirs(dest_dir, exist_ok=True)
+    dst = os.path.join(dest_dir, fn)
+    if os.path.exists(dst):
+        return (f"<span style='color:#e5c07b'>{html.escape(fn)} already exists in "
+                f"{html.escape(target_category)} — nothing moved</span>", None)
+    try:
+        shutil.move(src, dst)
+    except Exception as e:
+        return f"<span style='color:#e06c75'>{html.escape(str(e))}</span>", None
+    _refresh_lists({cat, target_category})
+    return (f"<span style='color:#98c379'>moved {html.escape(fn)} → "
+            f"{html.escape(target_category)}</span>", True)
+
+
+def delete_one(value):
+    """Delete a single file; the UI arms this behind a confirm click."""
+    try:
+        cat, fn, path = _resolve_selection(value)
+        size = os.path.getsize(path)
+        os.remove(path)
+    except Exception as e:
+        return f"<span style='color:#e06c75'>{html.escape(str(e))}</span>", None
+    _refresh_lists({cat})
+    return (f"<span style='color:#98c379'>deleted {html.escape(fn)} "
+            f"({_fmt_size(size)} freed)</span>", True)
 
 
 def move_models(selected, target_category):
@@ -824,31 +875,6 @@ def on_ui_tabs():
             refresh_q = gr.Button("🔄 Refresh", elem_id="model_downloader_refresh_queue")
         status = gr.HTML(value=_render_queue(), elem_id="model_downloader_status")
 
-        with gr.Accordion("Installed models — move or delete", open=False, elem_id="model_downloader_manage"):
-            manage_summary = gr.Markdown("Press **Refresh list** to see what's on disk.")
-            installed = gr.Dropdown(
-                label="Installed models (select one or more)",
-                choices=[], value=[], multiselect=True,
-                elem_id="model_downloader_installed",
-            )
-            with gr.Row():
-                refresh_installed_btn = gr.Button("🔄 Refresh list", elem_id="model_downloader_refresh_installed")
-                move_target = gr.Dropdown(
-                    label="Move to",
-                    choices=list(_category_dirs().keys()),
-                    value=None,
-                    elem_id="model_downloader_move_target",
-                )
-                move_btn = gr.Button("Move", variant="primary", elem_id="model_downloader_move")
-            with gr.Row():
-                confirm_delete = gr.Checkbox(
-                    label="Yes, delete permanently",
-                    value=False,
-                    elem_id="model_downloader_confirm_delete",
-                )
-                delete_btn = gr.Button("🗑 Delete selected", variant="stop", elem_id="model_downloader_delete")
-            manage_status = gr.HTML(elem_id="model_downloader_manage_status")
-
         top_title = gr.Markdown("**Top checkpoints on Hugging Face** — press refresh to load", elem_id="model_downloader_top_title")
         top_urls_state = gr.State([])
         top_rows, top_buttons = [], []
@@ -873,14 +899,6 @@ def on_ui_tabs():
         clear_done.click(fn=clear_finished, outputs=[status], show_progress="hidden")
         refresh_q.click(fn=queue_stream, outputs=[status], show_progress="hidden")
 
-        refresh_installed_btn.click(
-            fn=refresh_installed, outputs=[installed, manage_summary], show_progress="hidden")
-        move_btn.click(
-            fn=move_models, inputs=[installed, move_target],
-            outputs=[manage_status, installed, manage_summary], show_progress="hidden")
-        delete_btn.click(
-            fn=delete_models, inputs=[installed, confirm_delete],
-            outputs=[manage_status, installed, manage_summary], show_progress="hidden")
         refresh_top.click(
             fn=refresh_top_models,
             outputs=[top_title, *top_rows, top_urls_state, *top_buttons],
@@ -888,6 +906,79 @@ def on_ui_tabs():
         )
         for i, btn in enumerate(top_buttons):
             btn.click(fn=_add_top_url(i), inputs=[urls, top_urls_state], outputs=[urls], show_progress="hidden")
+
+        with gr.Accordion("Installed models — move or delete", open=False, elem_id="model_downloader_manage"):
+            all_cats = list(_category_dirs().keys())
+            rows_state = gr.State(load_installed("All"))
+            armed_state = gr.State("")        # row awaiting delete confirmation
+
+            with gr.Row():
+                filter_cat = gr.Dropdown(
+                    label="Show", choices=["All"] + all_cats, value="All",
+                    scale=2, elem_id="model_downloader_filter",
+                )
+                manage_summary = gr.Markdown(installed_summary(load_installed("All")))
+                refresh_installed_btn = gr.Button("🔄 Refresh", scale=0, elem_id="model_downloader_refresh_installed")
+            manage_status = gr.HTML(elem_id="model_downloader_manage_status")
+
+            @gr.render(inputs=[rows_state, armed_state, filter_cat])
+            def _render_installed(rows, armed, current_filter):
+                if not rows:
+                    gr.Markdown("_Nothing here yet._")
+                    return
+                with gr.Row():
+                    gr.Markdown("**Model**", scale=5)
+                    gr.Markdown("**Folder**", scale=2)
+                    gr.Markdown("**Size**", scale=1)
+                    gr.Markdown("**Move to**", scale=3)
+                    gr.Markdown("", scale=1)
+                for row in rows:
+                    value = row["value"]
+                    with gr.Row(equal_height=True):
+                        gr.Markdown(row["name"], scale=5)
+                        gr.Markdown(f"`{row['category']}`", scale=2)
+                        gr.Markdown(row["size"], scale=1)
+                        target = gr.Dropdown(
+                            choices=[c for c in all_cats if c != row["category"]],
+                            value=None, show_label=False, container=False, scale=3,
+                        )
+                        if armed == value:
+                            confirm_btn = gr.Button("Confirm?", variant="stop", scale=1, min_width=90)
+                            confirm_btn.click(
+                                fn=lambda v=value, f=current_filter: (
+                                    *delete_one(v)[:1], load_installed(f), ""),
+                                outputs=[manage_status, rows_state, armed_state],
+                            ).then(fn=installed_summary, inputs=[rows_state], outputs=[manage_summary])
+                        else:
+                            with gr.Row(scale=1):
+                                move_btn = gr.Button("Move", scale=1, min_width=70)
+                                del_btn = gr.Button("🗑", variant="stop", scale=0, min_width=44)
+                                move_btn.click(
+                                    fn=lambda t, v=value, f=current_filter: (
+                                        move_one(v, t)[0], load_installed(f), ""),
+                                    inputs=[target],
+                                    outputs=[manage_status, rows_state, armed_state],
+                                ).then(fn=installed_summary, inputs=[rows_state], outputs=[manage_summary])
+                                # First click arms the row; the button becomes
+                                # "Confirm?" so nothing is ever one click from gone.
+                                del_btn.click(
+                                    fn=lambda v=value: (
+                                        v, "<span style='opacity:.8'>Click <b>Confirm?</b> to delete "
+                                           "permanently, or Refresh to cancel.</span>"),
+                                    outputs=[armed_state, manage_status],
+                                )
+
+        # Kept queued: gr.render bodies cannot travel over an unqueued
+        # /run/predict response.
+        refresh_installed_btn.click(
+            fn=lambda f: (load_installed(f), ""),
+            inputs=[filter_cat], outputs=[rows_state, armed_state],
+        ).then(fn=installed_summary, inputs=[rows_state], outputs=[manage_summary])
+        filter_cat.change(
+            fn=lambda f: (load_installed(f), ""),
+            inputs=[filter_cat], outputs=[rows_state, armed_state],
+        ).then(fn=installed_summary, inputs=[rows_state], outputs=[manage_summary])
+
 
     return [(tab, "Model Downloader", "model_downloader")]
 
