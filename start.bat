@@ -136,6 +136,12 @@ rem stop Forge itself from starting -- the assistant just stays unavailable.
 "%VENV%\Scripts\python.exe" "%~dp0download_llm.py"
 if errorlevel 1 echo [warn] The AI assistant model download did not complete. Forge will start without it.
 
+rem ControlNet models (~6GB, first run only). Forge fetches preprocessors on
+rem demand but expects the models themselves to be placed by hand; this gets a
+rem working set. Runs once -- see download_controlnet.py for the env vars.
+"%VENV%\Scripts\python.exe" "%~dp0download_controlnet.py"
+if errorlevel 1 echo [warn] ControlNet model download did not complete. Forge will start without them.
+
 rem extra launch arguments: one line in extra-args.txt (optional, next to this
 rem script) and/or the FORGE_EXTRA_ARGS environment variable
 set "EXTRA_ARGS="

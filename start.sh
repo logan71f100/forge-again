@@ -95,6 +95,12 @@ venv/bin/python set_mode.py "$MODENAME" || fail
 venv/bin/python download_llm.py \
     || echo "[warn] AI assistant model download did not complete; starting without it."
 
+# ControlNet models (~6GB, first run only). Forge fetches preprocessors on demand
+# but expects the models themselves to be placed by hand; this gets a working set.
+# Runs once -- see download_controlnet.py for the environment variables.
+venv/bin/python download_controlnet.py \
+    || echo "[warn] ControlNet model download did not complete; starting without them."
+
 # extra launch arguments: one line in extra-args.txt (optional, next to this
 # script) and/or the FORGE_EXTRA_ARGS environment variable
 EXTRA_ARGS=""

@@ -689,6 +689,127 @@ def check_gpu_generation() -> None:
         record("gpu: session", FAIL, f"{type(e).__name__}: {str(e)[:300]}")
 
 
+# --------------------------------------------------------------------------
+# Tier 4 -- clean-machine install
+#
+# Every other tier assumes a working install, so none of them could have caught
+# the bug that mattered most in practice: on a machine without Git for Windows,
+# start.bat exited silently. These guard the fresh-install path.
+# --------------------------------------------------------------------------
+
+def check_launcher_guards() -> None:
+    """The launchers must handle missing git and must not swallow failures."""
+    bat = open(os.path.join(ROOT, "start.bat"), encoding="utf-8", errors="replace").read()
+    sh = open(os.path.join(ROOT, "start.sh"), encoding="utf-8", errors="replace").read()
+
+    problems = []
+    # git is a hard requirement: Forge clones three helper repos and runs
+    # `git rev-parse` on them even when they already exist.
+    if "GITURL" not in bat or "where git" not in bat:
+        problems.append("start.bat: no portable-git bootstrap (a machine without git will fail)")
+    if "command -v git" not in sh:
+        problems.append("start.sh: no git preflight check")
+
+    # A crash must not look like a clean exit. This is what turned a small bug
+    # into an unreadable one: the console window simply vanished.
+    if "ERRORLEVEL" not in bat.upper():
+        problems.append("start.bat: launch.py exit code is never checked")
+    if "pause" not in bat:
+        problems.append("start.bat: no pause on failure -- the window will vanish before it can be read")
+    if ":crashed" not in bat:
+        problems.append("start.bat: no crash handler")
+
+    if problems:
+        record("clean: launchers guard the fresh-install path", FAIL, "\n         ".join(problems))
+    else:
+        record("clean: launchers guard the fresh-install path", PASS,
+               "git bootstrap + exit-code check + pause present")
+
+
+def check_bootstrap_urls() -> None:
+    """The hardcoded bootstrap downloads must still exist.
+
+    Only a new user ever exercises these, so link rot would be invisible here
+    and fatal there.
+    """
+    bat = open(os.path.join(ROOT, "start.bat"), encoding="utf-8", errors="replace").read()
+    urls = dict(re.findall(r'set "(PYURL|GITURL)=(\S+)"', bat))
+    if not urls:
+        record("clean: bootstrap download URLs resolve", FAIL, "could not find PYURL/GITURL in start.bat")
+        return
+
+    bad = []
+    for name, url in sorted(urls.items()):
+        try:
+            req = urllib.request.Request(url, method="HEAD")
+            req.add_header("User-Agent", "forge-again-tests")
+            with urllib.request.urlopen(req, timeout=30) as r:
+                if r.status >= 400:
+                    bad.append(f"{name}: HTTP {r.status}")
+        except urllib.error.HTTPError as e:
+            # GitHub release assets answer HEAD with a redirect chain; only a
+            # real 4xx means the asset is gone.
+            if e.code >= 400:
+                bad.append(f"{name}: HTTP {e.code} -> {url}")
+        except Exception as e:
+            bad.append(f"{name}: {type(e).__name__}: {str(e)[:80]}")
+
+    if bad:
+        record("clean: bootstrap download URLs resolve", FAIL, "\n         ".join(bad))
+    else:
+        record("clean: bootstrap download URLs resolve", PASS, f"{len(urls)} URL(s) reachable")
+
+
+def check_git_bootstrap_works() -> None:
+    """Actually fetch portable git with git hidden, and clone with it.
+
+    Reproduces the reported machine: git absent from PATH. Skipped off Windows,
+    and skipped unless --deep is passed, since it downloads ~38 MB.
+    """
+    if sys.platform != "win32":
+        record("clean: portable git bootstrap", SKIP, "Windows-only path")
+        return
+    if not os.environ.get("FORGE_TEST_DEEP"):
+        record("clean: portable git bootstrap", SKIP,
+               "downloads ~38 MB; run with --deep to exercise it")
+        return
+
+    bat = open(os.path.join(ROOT, "start.bat"), encoding="utf-8", errors="replace").read()
+    m = re.search(r'set "GITURL=(\S+)"', bat)
+    if not m:
+        record("clean: portable git bootstrap", FAIL, "GITURL not found in start.bat")
+        return
+
+    tmp = tempfile.mkdtemp(prefix="forge-git-test-")
+    try:
+        zip_path = os.path.join(tmp, "git.zip")
+        gitdir = os.path.join(tmp, "git")
+        urllib.request.urlretrieve(m.group(1), zip_path)
+        os.makedirs(gitdir, exist_ok=True)
+        import zipfile
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(gitdir)
+        git_exe = os.path.join(gitdir, "cmd", "git.exe")
+        if not os.path.exists(git_exe):
+            record("clean: portable git bootstrap", FAIL, "cmd/git.exe missing after extraction")
+            return
+        # The operation that was actually failing on the reported machine.
+        clone_to = os.path.join(tmp, "assets")
+        proc = subprocess.run(
+            [git_exe, "clone", "--depth", "1",
+             "https://github.com/AUTOMATIC1111/stable-diffusion-webui-assets.git", clone_to],
+            capture_output=True, text=True, timeout=300)
+        if proc.returncode == 0 and os.path.isdir(os.path.join(clone_to, ".git")):
+            record("clean: portable git bootstrap", PASS, "fetched portable git and cloned assets")
+        else:
+            record("clean: portable git bootstrap", FAIL,
+                   (proc.stderr or proc.stdout or "clone failed")[:300])
+    except Exception as e:
+        record("clean: portable git bootstrap", FAIL, f"{type(e).__name__}: {str(e)[:200]}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 CHECKS = {
     "static": [
         ("syntax", check_syntax),
@@ -703,6 +824,11 @@ CHECKS = {
     "gpu": [
         ("gpu", check_gpu_generation),
     ],
+    "clean": [
+        ("guards", check_launcher_guards),
+        ("urls", check_bootstrap_urls),
+        ("gitboot", check_git_bootstrap_works),
+    ],
 }
 
 
@@ -711,7 +837,10 @@ def main() -> int:
     ap.add_argument("--static", action="store_true", help="tier 1 only (fast)")
     ap.add_argument("--boot", action="store_true", help="tier 2 only")
     ap.add_argument("--gpu", action="store_true", help="tier 3 only (needs a free GPU)")
-    ap.add_argument("--quick", action="store_true", help="tiers 1+2, skip GPU generation")
+    ap.add_argument("--clean", action="store_true", help="tier 4 only (fresh-install path)")
+    ap.add_argument("--deep", action="store_true",
+                    help="also run downloads-heavy checks (fetches portable git)")
+    ap.add_argument("--quick", action="store_true", help="static + clean, no server start")
     ap.add_argument("--list", action="store_true", help="list checks and exit")
     args = ap.parse_args()
 
@@ -722,12 +851,15 @@ def main() -> int:
                 print(f"  {name:10} {(fn.__doc__ or '').strip().splitlines()[0]}")
         return 0
 
+    if args.deep:
+        os.environ["FORGE_TEST_DEEP"] = "1"
+
     # Default is a full run -- this is a merge gate, so thoroughness beats
-    # speed. Use --quick for the fast subset while iterating.
-    selected = [t for t in ("static", "boot", "gpu") if getattr(args, t)]
+    # speed. Use --quick for the checks that need no server and no GPU.
+    selected = [t for t in ("static", "boot", "gpu", "clean") if getattr(args, t)]
     if args.quick:
-        selected = ["static", "boot"]
-    tiers = selected or ["static", "boot", "gpu"]
+        selected = ["static", "clean"]
+    tiers = selected or ["static", "clean", "boot", "gpu"]
 
     t0 = time.time()
     for tier in tiers:
