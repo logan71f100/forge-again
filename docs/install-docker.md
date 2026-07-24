@@ -1,11 +1,12 @@
 # Running forge-again in Docker
 
-**Linux hosts with an NVIDIA GPU** (including Windows via WSL2). The image bakes in
+Runs on **any host that can run Docker with an NVIDIA GPU**. The image bakes in
 Python 3.12, torch 2.13+cu126 and every dependency, so the container starts in
 about 30 seconds instead of bootstrapping ~12 GB on first run.
 
-Verified on an RTX 2080 Ti (11 GB) under WSL2: image builds, the GPU is visible
-inside the container, and SDXL generation works end to end.
+Nothing about the image is host-specific — if `docker run --gpus all` works on your
+machine, this works. Verified end to end on an RTX 2080 Ti (11 GB): the image builds,
+the GPU is visible inside the container, and SDXL generation produces images.
 
 ## Requirements
 
