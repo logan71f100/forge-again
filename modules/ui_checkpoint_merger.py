@@ -43,7 +43,13 @@ class UiCheckpointMerger:
 
             @gr.render(triggers=[self.modelmerger_built_gate.change])
             def _render_modelmerger_body():
-                self._build_body()
+                # force_interactive_components: this body builds inside a gr.render, so
+                # gradio infers every control as non-interactive (disabled) -- the model
+                # dropdowns, multiplier slider and interpolation radio all came up dead
+                # without this override.
+                from modules import gradio_extensions
+                with gradio_extensions.force_interactive_components():
+                    self._build_body()
                 if self._setup_args is not None:
                     self._wire_events(**self._setup_args)
 

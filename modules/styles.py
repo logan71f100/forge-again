@@ -15,10 +15,15 @@ class PromptStyle(typing.NamedTuple):
 
 
 def apply_styles_to_prompt(prompt, styles):
-    prompt = comments.strip_comments(prompt).strip()
+    # `prompt` and individual `styles` can be None: the styles list includes
+    # auto-generated divider entries ("------ STYLES ------") whose prompt /
+    # negative_prompt are None, and they are selectable in the dropdown. Applying
+    # one used to reach re.sub(None) in strip_comments and 500 the whole request
+    # (also broke the token counter). Coerce None -> "" so a divider is a no-op.
+    prompt = comments.strip_comments(prompt or "").strip()
 
     for style in styles:
-        style = comments.strip_comments(style).strip()
+        style = comments.strip_comments(style or "").strip()
 
         if "{prompt}" in style:
             prompt = style.replace("{prompt}", prompt)

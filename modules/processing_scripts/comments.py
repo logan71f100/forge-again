@@ -2,6 +2,9 @@ from modules import shared
 import re
 
 def strip_comments(text):
+    # defensive: never call re.sub on a non-string (e.g. a style with prompt=None)
+    if not isinstance(text, str):
+        return text
     if shared.opts.enable_prompt_comments:
         text = re.sub('(^|\n)#[^\n]*(\n|$)', '\n', text)    # whole line comment
         text = re.sub('#[^\n]*(\n|$)', '\n', text)          # in the middle of the line comment

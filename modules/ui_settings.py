@@ -178,7 +178,12 @@ class UiSettings:
 
             @gr.render(triggers=[self.settings_built_gate.change])
             def _render_settings_body():
-                self._build_settings_body()
+                # force_interactive_components: lazily-built body -> without the
+                # interactive-inference override gradio renders the settings inputs
+                # (sliders/dropdowns/radios) disabled.
+                from modules import gradio_extensions
+                with gradio_extensions.force_interactive_components():
+                    self._build_settings_body()
 
         self.interface = settings_interface
 

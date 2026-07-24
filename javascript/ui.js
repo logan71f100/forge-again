@@ -51,15 +51,39 @@ function extract_image_from_gallery(gallery) {
 
 window.args_to_array = Array.from; // Compatibility with e.g. extensions that may expect this to be around
 
-function switch_to_txt2img() {
-    gradioApp().querySelector('#tabs').querySelectorAll('button')[0].click();
+// Click a tab button by its aria-controls target, scoped to one tab group. The
+// old helpers indexed into #tabs.querySelectorAll('button')[n], but in gradio 6
+// that sweeps up every nested button (canvas toolbar, sub-tab bars, ...), so the
+// fixed index no longer lands on the intended top tab -- the PNG Info "Send to"
+// buttons switched nothing, and switch_to_img2img_tab threw on a not-yet-built
+// img2img. Selecting by aria-controls is stable regardless of nesting.
+function _forge_click_tab(groupId, controlsId) {
+    let el = gradioApp().getElementById(groupId);
+    if (!el) return false;
+    let btn = Array.from(el.querySelectorAll('button[role="tab"]'))
+        .filter(b => b.closest('.tabs') === el)
+        .find(b => (b.getAttribute('aria-controls') || '') === controlsId);
+    if (btn) {
+        btn.click();
+        return true;
+    }
+    return false;
+}
 
+function switch_to_txt2img() {
+    _forge_click_tab('tabs', 'tab_txt2img');
     return Array.from(arguments);
 }
 
 function switch_to_img2img_tab(no) {
-    gradioApp().querySelector('#tabs').querySelectorAll('button')[1].click();
-    gradioApp().getElementById('mode_img2img').querySelectorAll('button')[no].click();
+    const subtabs = ['img2img_img2img_tab', 'img2img_img2img_sketch_tab', 'img2img_inpaint_tab',
+                     'img2img_inpaint_sketch_tab', 'img2img_inpaint_upload_tab', 'img2img_batch_tab'];
+    _forge_click_tab('tabs', 'tab_img2img');
+    const ctrl = subtabs[no] || subtabs[0];
+    // img2img may still be building lazily on first open -- retry the sub-tab click.
+    if (!_forge_click_tab('mode_img2img', ctrl)) {
+        setTimeout(() => _forge_click_tab('mode_img2img', ctrl), 300);
+    }
 }
 function switch_to_img2img() {
     switch_to_img2img_tab(0);
@@ -82,19 +106,30 @@ function switch_to_inpaint_sketch() {
 }
 
 function switch_to_extras() {
-    gradioApp().querySelector('#tabs').querySelectorAll('button')[3].click();
-
+    _forge_click_tab('tabs', 'tab_extras');
     return Array.from(arguments);
 }
 
 function get_tab_index(tabId) {
-    let buttons = gradioApp().getElementById(tabId).querySelector('div').querySelectorAll('button');
-    for (let i = 0; i < buttons.length; i++) {
-        if (buttons[i].classList.contains('selected')) {
-            return i;
-        }
+    // Return the index of the selected tab among THIS group's own tabs. The old
+    // code took the first descendant <div> and every <button> under it, which in
+    // gradio 6 also swept up the ForgeCanvas toolbar buttons nested inside
+    // #mode_img2img -- so the selected sub-tab landed at index 7 and the img2img
+    // interrogate/aspect handlers got a bogus mode. Scope to this group's own
+    // role="tab" buttons (canvas/toolbar buttons have no role=tab), and collapse
+    // gradio-6's occasional duplicate button for the same tab (same aria-controls)
+    // so the index still matches the logical sub-tab.
+    let el = gradioApp().getElementById(tabId);
+    if (!el) return 0;
+    let buttons = Array.from(el.querySelectorAll('button[role="tab"]')).filter(b => b.closest('.tabs') === el);
+    let seen = [];
+    let selected = null;
+    for (const b of buttons) {
+        const ctrl = b.getAttribute('aria-controls') || b.textContent.trim();
+        if (!seen.includes(ctrl)) seen.push(ctrl);
+        if (selected === null && b.classList.contains('selected')) selected = ctrl;
     }
-    return 0;
+    return selected === null ? 0 : Math.max(0, seen.indexOf(selected));
 }
 
 function create_tab_index_args(tabId, args) {

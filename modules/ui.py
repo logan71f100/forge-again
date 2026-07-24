@@ -142,6 +142,13 @@ def process_interrogate(interrogation_function, mode, ii_input_dir, ii_output_di
 
         return [gr.update(), None]
 
+    # defensive: an unexpected/out-of-range mode must still return the 2 values
+    # the click's outputs expect, or gradio raises "needed 2, returned 1" and the
+    # whole interrogate button dies (this is exactly how the gradio-6 tab-index
+    # regression surfaced). Return a safe no-op rather than risk interrogating a
+    # None image; the get_tab_index fix keeps mode in range for real clicks.
+    return [gr.update(), None]
+
 
 def interrogate(image):
     prompt = shared.interrogator.interrogate(image.convert("RGB"))
@@ -985,7 +992,12 @@ def create_ui():
 
         @gr.render(triggers=[extras_built_gate.change])
         def _render_extras_body():
-            ui_postprocessing.create_ui()
+            # force_interactive_components: like img2img, this body is built inside a
+            # gr.render, so gradio infers EVERY control as non-interactive (disabled)
+            # unless we override the inference. Without this the Extras upscaler
+            # dropdowns, resize/visibility sliders and radios all render disabled.
+            with gradio_extensions.force_interactive_components():
+                ui_postprocessing.create_ui()
             # Wire paste buttons now that the Extras body exists. This covers BOTH directions:
             # incoming "Send to extras" buttons (from txt2img/img2img/PNG Info, skipped at page
             # load because paste_fields["extras"] did not exist yet) and the Extras output
@@ -1002,6 +1014,9 @@ def create_ui():
 
         @gr.render(triggers=[pnginfo_built_gate.change])
         def _render_pnginfo_body():
+          # force_interactive_components: lazily-built body, else gradio renders its
+          # controls disabled (see the img2img/extras bodies for the full rationale).
+          with gradio_extensions.force_interactive_components():
             with ResizeHandleRow(equal_height=False):
                 with gr.Column(variant='panel'):
                     image = gr.Image(elem_id="pnginfo_image", label="Source", source="upload", interactive=True, type="pil", height="50vh", image_mode="RGBA")
@@ -1062,7 +1077,10 @@ def create_ui():
 
         @gr.render(triggers=[extensions_built_gate.change])
         def _render_extensions_body():
-            ui_extensions.create_ui()
+            # force_interactive_components: lazily-built body -> gradio would render
+            # its controls disabled without the interactive-inference override.
+            with gradio_extensions.force_interactive_components():
+                ui_extensions.create_ui()
 
     extensions_interface.extensions_built_gate = extensions_built_gate
     interfaces += [(extensions_interface, "Extensions", "extensions")]

@@ -665,10 +665,12 @@ class ServerSession:
     paying that toll.
     """
 
-    def __init__(self, mode: str = None, timeout: int = 420):
+    def __init__(self, mode: str = None, timeout: int = 420, port_base: int = 7910):
         self.mode = mode or self._current_mode()
         self.timeout = timeout
-        self.port = free_port(7910)
+        # port_base lets several sessions run at once (e.g. parallel UI-audit
+        # agents) without racing for the same port -- give each a distinct base.
+        self.port = free_port(port_base)
         self.tmp = tempfile.mkdtemp(prefix="forge-gpu-test-")
         self.log: list[str] = []
         self.proc: subprocess.Popen | None = None
@@ -1651,6 +1653,62 @@ def check_ui_regression() -> None:
                 baselined = len(console_errors) - len(real)
                 record("ui: no new JavaScript errors", PASS,
                        f"{baselined} known pre-existing error(s) baselined" if baselined else "")
+
+            # --- secondary-tab audits (run LAST) -----------------------------
+            # These navigate to Extras/Merger/PNG Info and select a non-default
+            # img2img sub-tab, so they run AFTER the image-dependent checks and
+            # the no-JS-errors snapshot above (their incidental tab-switch console
+            # noise is a separate, pre-existing issue, not what that guard tracks).
+
+            # EVERY lazy tab must apply force_interactive_components(): each
+            # lazily-built tab (Extras, Merger, PNG Info, Extensions, Settings)
+            # wraps its gr.render body in it, or gradio infers its controls as
+            # disabled. Only img2img had it -- the Extras upscaler dropdowns +
+            # resize/visibility sliders and the whole Merger came up dead (22
+            # controls). Assert zero disabled inputs on each.
+            for _label, _tab in (("Extras", "#tab_extras"),
+                                 ("Checkpoint Merger", "#tab_modelmerger"),
+                                 ("PNG Info", "#tab_pnginfo")):
+                try:
+                    page.click(f'button[role=tab]:text-is("{_label}")', timeout=15000)
+                    page.wait_for_timeout(3500)
+                    nd = page.evaluate(
+                        "(sel) => { const r = document.querySelector(sel); if (!r) return -1;"
+                        " return r.querySelectorAll('input:disabled, select:disabled, textarea:disabled,"
+                        " button:disabled, [role=listbox][aria-disabled=true]').length; }", _tab)
+                    if nd < 0:
+                        record(f"ui: {_label} controls interactive", FAIL, f"{_tab} not found")
+                    elif nd:
+                        record(f"ui: {_label} controls interactive", FAIL,
+                               f"{nd} disabled control(s) -- force_interactive_components missing on this lazy tab")
+                    else:
+                        record(f"ui: {_label} controls interactive", PASS)
+                except Exception as e:
+                    record(f"ui: {_label} controls interactive", FAIL, f"{type(e).__name__}: {str(e)[:150]}")
+
+            # get_tab_index('mode_img2img') must return the real sub-tab index.
+            # Interrogate CLIP/DeepBooru and the aspect-ratio overlay read it; the
+            # old impl swept up the ForgeCanvas toolbar buttons and returned 7, so
+            # process_interrogate got a mode with no branch and died with "needed
+            # 2, returned 1". Select a non-first sub-tab and assert the index.
+            try:
+                page.click('button[role=tab]:text-is("Img2img")', timeout=15000)
+                page.wait_for_timeout(3000)
+                page.evaluate("""() => { const bs=[...document.querySelectorAll('#mode_img2img button[role=tab]')]
+                    .filter(b=>b.closest('.tabs') && b.closest('.tabs').id==='mode_img2img');
+                    const b=bs.find(x=>x.textContent.trim().toLowerCase()==='inpaint' && x.offsetParent!==null);
+                    if(b) b.click(); }""")
+                page.wait_for_timeout(800)
+                idx = page.evaluate("() => get_tab_index('mode_img2img')")
+                top = page.evaluate("() => get_tab_index('tabs')")
+                if idx == 2 and top == 1:
+                    record("ui: get_tab_index returns the real sub-tab", PASS, f"inpaint={idx}, top(img2img)={top}")
+                else:
+                    record("ui: get_tab_index returns the real sub-tab", FAIL,
+                           f"inpaint sub-tab index={idx} (want 2), top img2img index={top} (want 1) "
+                           "-- interrogate would get a bogus mode")
+            except Exception as e:
+                record("ui: get_tab_index returns the real sub-tab", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
 
             browser.close()
 
