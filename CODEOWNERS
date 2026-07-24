@@ -1,1 +1,3 @@
-*       @lllyasviel
+# Inherited from upstream as "@lllyasviel", which would have declared upstream's
+# maintainer the owner of this fork and auto-requested their review on every PR.
+*       @logan71f100

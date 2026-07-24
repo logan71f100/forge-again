@@ -48,6 +48,18 @@ export REPLACER_DEF_MASK_EXPAND=15 REPLACER_DEF_BOX_THRESHOLD=0.35
 export REPLACER_DEF_MASK_BLUR=6 REPLACER_DEF_PADDING=48 REPLACER_DEF_FILL=original
 
 # --------------------------------------------------------------- bootstrap
+# launch.py clones three helper repos (assets, huggingface_guess, BLIP) and runs
+# `git rev-parse` on them even when they already exist, so git is required, not
+# optional. Fail here with something actionable rather than inside a traceback.
+if ! command -v git >/dev/null 2>&1; then
+    echo "[bootstrap] git was not found on PATH, and Forge needs it to fetch three"
+    echo "[bootstrap] helper repositories. Install it and re-run:"
+    echo "[bootstrap]   Debian/Ubuntu:  sudo apt install git"
+    echo "[bootstrap]   Fedora/RHEL:    sudo dnf install git"
+    echo "[bootstrap]   Arch:           sudo pacman -S git"
+    exit 1
+fi
+
 if [ ! -x python/bin/python3 ]; then
     echo "[bootstrap] Downloading portable Python 3.12 ..."
     curl -L --fail -o _py.tar.gz "$PYURL" || fail
@@ -75,10 +87,13 @@ if [ ! -f venv/.deps_installed ]; then
 fi
 
 # --------------------------------------------------------------- configure
-venv/bin/python set_mode.py "$MODENAME"
+# Fatal: a failed mode write leaves the UI pointed at the wrong model folder.
+venv/bin/python set_mode.py "$MODENAME" || fail
 
 # AI assistant vision model (~18GB, first run only; set FORGE_NO_LLM=1 to skip)
-venv/bin/python download_llm.py
+# Deliberately not fatal -- a failed download shouldn't stop Forge starting.
+venv/bin/python download_llm.py \
+    || echo "[warn] AI assistant model download did not complete; starting without it."
 
 # extra launch arguments: one line in extra-args.txt (optional, next to this
 # script) and/or the FORGE_EXTRA_ARGS environment variable

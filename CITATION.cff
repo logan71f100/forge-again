@@ -1,7 +1,25 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
+title: "forge-again"
+abstract: >-
+  A modernized fork of Stable Diffusion WebUI Forge, ported to Gradio 6,
+  Python 3.12 and current PyTorch / HuggingFace releases, with a
+  self-bootstrapping launcher and a built-in vision-LLM assistant.
 authors:
-  - given-names: AUTOMATIC1111
-title: "Stable Diffusion Web UI"
-date-released: 2022-08-22
-url: "https://github.com/AUTOMATIC1111/stable-diffusion-webui"
+  - name: "logan71f100"
+url: "https://github.com/logan71f100/forge-again"
+repository-code: "https://github.com/logan71f100/forge-again"
+license: AGPL-3.0
+date-released: 2026-07-23
+references:
+  - type: software
+    title: "Stable Diffusion WebUI Forge"
+    authors:
+      - name: "lllyasviel"
+    url: "https://github.com/lllyasviel/stable-diffusion-webui-forge"
+  - type: software
+    title: "Stable Diffusion Web UI"
+    authors:
+      - name: "AUTOMATIC1111"
+    url: "https://github.com/AUTOMATIC1111/stable-diffusion-webui"
+    date-released: 2022-08-22

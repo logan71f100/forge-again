@@ -9,7 +9,9 @@ first, including the AI assistant with its prebuilt VRAM-hibernate server.
 - An **NVIDIA GPU** (dependencies install CUDA 12.6 wheels) and a current driver
 - ~12 GB of disk for Python and dependencies, plus your models
 - Nothing else — no system Python, no Git, no CUDA toolkit. `curl` and `tar` ship with
-  Windows 10+ and that's all the bootstrap needs.
+  Windows 10+ and that's all the bootstrap needs. If `git` isn't on your PATH the
+  launcher fetches a portable copy (MinGit, ~38 MB) into `git\`, the same way it
+  fetches Python — Forge needs git to pull three helper repositories.
 
 Developed on an RTX 2080 Ti (11 GB). Everything, including Flux and the 30B assistant
 model, runs in 11 GB via offloading and VRAM hibernate — more VRAM is just faster.

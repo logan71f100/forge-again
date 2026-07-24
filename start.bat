@@ -16,6 +16,8 @@ set "PYDIR=%~dp0python"
 set "VENV=%~dp0venv"
 set "STAMP=%VENV%\.deps_installed"
 set "PYURL=https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.12.13+20260718-x86_64-pc-windows-msvc-install_only.tar.gz"
+set "GITDIR=%~dp0git"
+set "GITURL=https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip"
 set "TORCH_CMD=torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126"
 
 rem ------------------------------------------------------------- mode select
@@ -89,6 +91,25 @@ if not exist "%PYDIR%\python.exe" (
     del "%~dp0_py.tar.gz"
 )
 
+rem launch.py clones three helper repos (assets, huggingface_guess, BLIP) and
+rem calls `git rev-parse` on them even when they already exist, so git is a hard
+rem requirement -- not an optional convenience. Bootstrap a portable MinGit the
+rem same way Python is bootstrapped, so a machine without Git for Windows still
+rem works. Only used when git isn't already on PATH.
+where git >nul 2>&1
+if errorlevel 1 (
+    if not exist "%GITDIR%\cmd\git.exe" (
+        echo [bootstrap] git not found; downloading portable Git ...
+        curl -L --fail -o "%~dp0_git.zip" "%GITURL%" || goto :failgit
+        echo [bootstrap] Extracting Git ...
+        if exist "%GITDIR%" rmdir /s /q "%GITDIR%"
+        mkdir "%GITDIR%"
+        tar -xf "%~dp0_git.zip" -C "%GITDIR%" || goto :failgit
+        del "%~dp0_git.zip"
+    )
+    set "PATH=%GITDIR%\cmd;%PATH%"
+)
+
 if not exist "%VENV%\Scripts\python.exe" (
     echo [bootstrap] Creating virtual environment ...
     "%PYDIR%\python.exe" -m venv "%VENV%" || goto :fail
@@ -106,10 +127,14 @@ if not exist "%STAMP%" (
 )
 
 rem --------------------------------------------------------------- configure
-"%VENV%\Scripts\python.exe" "%~dp0set_mode.py" %MODENAME%
+rem Fatal: a failed mode write leaves the UI pointed at the wrong model folder.
+"%VENV%\Scripts\python.exe" "%~dp0set_mode.py" %MODENAME% || goto :fail
 
 rem AI assistant vision model (~18GB, first run only; set FORGE_NO_LLM=1 to skip)
+rem Deliberately NOT fatal: a failed or interrupted model download shouldn't
+rem stop Forge itself from starting -- the assistant just stays unavailable.
 "%VENV%\Scripts\python.exe" "%~dp0download_llm.py"
+if errorlevel 1 echo [warn] The AI assistant model download did not complete. Forge will start without it.
 
 rem extra launch arguments: one line in extra-args.txt (optional, next to this
 rem script) and/or the FORGE_EXTRA_ARGS environment variable
@@ -127,13 +152,44 @@ set "SD_WEBUI_RESTART=1"
 set "HF_HOME=%FORGE_MODELS_DIR%\hf-cache"
 "%VENV%\Scripts\python.exe" "%~dp0launch.py" --listen --port %FORGE_PORT% --api --cuda-malloc --no-half-vae --disable-xformers --skip-python-version-check --ckpt-dir "%FORGE_MODELS_DIR%\checkpoints\%CKMODE%" --lora-dir "%FORGE_MODELS_DIR%\Lora" --vae-dir "%FORGE_MODELS_DIR%\VAE" --text-encoder-dir "%FORGE_MODELS_DIR%\text_encoder" --esrgan-models-path "%FORGE_MODELS_DIR%\ESRGAN" %AUTOLAUNCH% %EXTRA_ARGS% %FORGE_EXTRA_ARGS%
 
+set "RC=%ERRORLEVEL%"
+
 rem UI-triggered restarts relaunch through this loop: mark them so the server
 rem does not open another browser tab each time
 if exist "%~dp0tmp\restart" ( del /q "%~dp0tmp\restart" & set "SD_WEBUI_RESTARTING=1" & goto launch )
+
+rem Without this check a crash and a clean shutdown looked identical: the
+rem window simply vanished, taking the traceback with it.
+if not "%RC%"=="0" goto :crashed
 exit /b 0
+
+:crashed
+echo.
+echo [forge] Forge exited with error code %RC%.
+echo [forge] The messages above this line explain why. Frequent causes:
+echo [forge]   * a dependency failed to install -^> delete venv\.deps_installed and re-run
+echo [forge]   * an out-of-date NVIDIA driver
+echo [forge]   * the port is already in use     -^> set FORGE_PORT to something else
+echo [forge]
+echo [forge] To capture everything for a bug report:  start.bat ^> run.log 2^>^&1
+echo.
+pause
+exit /b %RC%
+
+:failgit
+echo.
+echo [bootstrap] Could not download or extract portable Git.
+echo [bootstrap] Forge needs git to fetch three helper repositories.
+echo [bootstrap] Check your internet connection and re-run, or install Git for
+echo [bootstrap] Windows yourself from https://git-scm.com/download/win
+echo.
+pause
+exit /b 1
 
 :fail
 echo.
 echo [bootstrap] SETUP FAILED. Fix the error above and re-run. Partial state is
 echo [bootstrap] kept so a re-run resumes where it stopped.
+echo.
+pause
 exit /b 1

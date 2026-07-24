@@ -81,11 +81,13 @@ coverage.xml
 # bundled portable Node runtime for gradio 6 SSR (like venv, not source)
 /node/
 
-# self-bootstrap artifacts (portable Python + venv, like venv itself)
+# self-bootstrap artifacts (portable Python + portable git + venv)
 /python/
+/git/
 /venv312/
 /_venv312_install.log
 /_py*.tar.gz
+/_git.zip
 /_pytmp/
 
 # per-machine mode/session state (written by set_mode.py / the mode switch)
