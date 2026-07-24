@@ -180,6 +180,144 @@ def check_pins_hold() -> None:
                out[:400] or "check_pins.py reported drift")
 
 
+def _load_downloader():
+    """Import the model-downloader extension standalone.
+
+    Forge's modules aren't importable outside a running server, so they're
+    stubbed. This lets the downloader's classification and file-handling logic
+    be tested without booting anything.
+    """
+    import types
+    import importlib.util
+
+    for name in ("modules",):
+        sys.modules.setdefault(name, types.ModuleType(name))
+    mods = sys.modules["modules"]
+    mods.script_callbacks = types.SimpleNamespace(on_ui_tabs=lambda *a, **k: None)
+    mods.shared = types.SimpleNamespace(cmd_opts=types.SimpleNamespace())
+    mods.paths = types.SimpleNamespace(models_path="models", data_path=".")
+    mods.errors = types.SimpleNamespace(report=lambda *a, **k: None)
+    if "gradio" not in sys.modules:
+        g = types.ModuleType("gradio")
+        g.update = lambda **k: k
+        sys.modules["gradio"] = g
+
+    path = os.path.join(ROOT, "extensions-builtin", "model-downloader",
+                        "scripts", "model_downloader.py")
+    spec = importlib.util.spec_from_file_location("_md_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Filename -> expected folder. Each entry is a real case, and several are
+# regressions: Kataragi is a ControlNet that the "xl" rule used to claim,
+# ae.safetensors is the Flux VAE and contains no "vae" at all, and the
+# Juggernaut/RealVis names broke when the XL match was made too strict.
+CLASSIFY_CASES = [
+    ("Kataragi_inpaintXL-fp16.safetensors", "ControlNet"),
+    ("control_v11p_sd15_canny_fp16.safetensors", "ControlNet"),
+    ("xinsir-depth-sdxl.safetensors", "ControlNet"),
+    ("controlnet-union-promax-sdxl.safetensors", "ControlNet"),
+    ("ae.safetensors", "VAE"),
+    ("sdxlVAE_sdxlVAE.safetensors", "VAE"),
+    ("4x-UltraSharp.pth", "Upscaler (ESRGAN)"),
+    ("t5xxl_fp8_e4m3fn.safetensors", "Text encoder"),
+    ("clip_l.safetensors", "Text encoder"),
+    ("someStyle_v2_lora.safetensors", "LoRA"),
+    ("fluxunchained-dev-Q6_K.gguf", "Checkpoint (Flux)"),
+    ("JuggernautXL.safetensors", "Checkpoint (XL)"),
+    ("RealVisXL_V5.safetensors", "Checkpoint (XL)"),
+    ("anterosXXXL_v10.safetensors", "Checkpoint (XL)"),
+    ("novaFurryXL_ilV180A.safetensors", "Checkpoint (XL)"),
+    ("v1-5-pruned-emaonly.safetensors", "Checkpoint (SD)"),
+    # Deliberately unclassifiable: the name says nothing about the base model.
+    # None is the correct answer -- callers fall back to metadata, then mode.
+    ("cyberrealistic_v90.safetensors", None),
+    ("epicrealism_pureEvolutionV5.safetensors", None),
+]
+
+
+def check_downloader_classification() -> None:
+    """Model files must be sorted into the right folder by filename."""
+    try:
+        md = _load_downloader()
+    except Exception as e:
+        record("downloader: filename classification", FAIL, f"import failed: {type(e).__name__}: {e}")
+        return
+    wrong = []
+    for name, want in CLASSIFY_CASES:
+        got = md._guess_category(name)
+        if got != want:
+            wrong.append(f"{name}: expected {want!r}, got {got!r}")
+    if wrong:
+        record("downloader: filename classification", FAIL, "\n         ".join(wrong[:8]))
+    else:
+        record("downloader: filename classification", PASS, f"{len(CLASSIFY_CASES)} cases")
+
+
+def check_downloader_file_safety() -> None:
+    """Move/delete must not escape their folder or clobber existing files."""
+    try:
+        md = _load_downloader()
+    except Exception as e:
+        record("downloader: file operation safety", FAIL, f"import failed: {e}")
+        return
+
+    tmp = tempfile.mkdtemp(prefix="forge-dl-test-")
+    problems = []
+    try:
+        cats = {c: os.path.join(tmp, re.sub(r"\W", "_", c))
+                for c in ("Checkpoint (SD)", "Checkpoint (XL)", "LoRA")}
+        for d in cats.values():
+            os.makedirs(d, exist_ok=True)
+        md._category_dirs = lambda: cats
+        md._refresh_lists = lambda *a, **k: None
+
+        xl = os.path.join(cats["Checkpoint (XL)"], "m.safetensors")
+        sd = os.path.join(cats["Checkpoint (SD)"], "m.safetensors")
+        open(xl, "wb").write(b"x" * 2048)
+        open(sd, "wb").write(b"y" * 99)
+
+        # 1. path traversal must be rejected outright
+        for evil in ("Checkpoint (SD)::../../evil.safetensors",
+                     "Checkpoint (SD)::..\\..\\evil.safetensors",
+                     "Nope::m.safetensors"):
+            try:
+                md._resolve_selection(evil)
+                problems.append(f"accepted an escaping selection: {evil}")
+            except Exception:
+                pass
+
+        # 2. a move must never overwrite an existing destination
+        md.move_one("Checkpoint (XL)::m.safetensors", "Checkpoint (SD)")
+        if not os.path.exists(xl):
+            problems.append("move clobbered: source removed despite a name clash")
+        if os.path.getsize(sd) != 99:
+            problems.append("move clobbered: destination file was overwritten")
+
+        # 3. a clean move relocates the file
+        os.remove(sd)
+        md.move_one("Checkpoint (XL)::m.safetensors", "Checkpoint (SD)")
+        if os.path.exists(xl) or not os.path.exists(sd):
+            problems.append("clean move did not relocate the file")
+
+        # 4. delete removes exactly the target
+        md.delete_one("Checkpoint (SD)::m.safetensors")
+        if os.path.exists(sd):
+            problems.append("delete did not remove the file")
+    except Exception as e:
+        problems.append(f"{type(e).__name__}: {e}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    if problems:
+        record("downloader: file operation safety", FAIL, "\n         ".join(problems))
+    else:
+        record("downloader: file operation safety", PASS,
+               "traversal rejected, no clobbering, move + delete correct")
+
+
 def check_json_and_bom() -> None:
     """JSON must parse strictly and must NOT carry a UTF-8 BOM.
 
@@ -656,11 +794,23 @@ def check_gpu_generation() -> None:
 
             # --- determinism: same seed must reproduce the same image --------
             try:
+                from PIL import ImageChops, ImageStat
                 r2 = s.post("/sdapi/v1/txt2img", dict(base, width=768, height=768))
-                same = (r2.get("images") or [None])[0] == first
-                record("gpu: same seed reproduces the same image",
-                       PASS if same else FAIL,
-                       "" if same else "identical request with a fixed seed produced a different image")
+                again = _decode((r2.get("images") or [""])[0]).convert("RGB")
+                d = ImageChops.difference(_decode(first).convert("RGB"), again)
+                diff = sum(ImageStat.Stat(d).mean) / 3.0
+                # Not byte-equality: Forge offloads dynamically, so the same
+                # request can take a slightly different execution path
+                # depending on free VRAM and land a few LSBs apart. A genuine
+                # seed regression produces a completely different image
+                # (mean diff in the tens), so the threshold is far below that
+                # while staying well clear of float noise.
+                if diff < 2.0:
+                    record("gpu: same seed reproduces the same image", PASS,
+                           f"mean diff {diff:.2f}")
+                else:
+                    record("gpu: same seed reproduces the same image", FAIL,
+                           f"same seed produced a materially different image (mean diff {diff:.1f})")
             except Exception as e:
                 record("gpu: same seed reproduces the same image", FAIL, str(e)[:200])
 
@@ -680,6 +830,59 @@ def check_gpu_generation() -> None:
             except Exception as e:
                 record("gpu: hires fix produces the scaled size", FAIL,
                        f"{type(e).__name__}: {str(e)[:120]}\n         server said:\n         "
+                       + s.recent_errors())
+
+            # --- inpaint: the masked region changes, the rest is left alone --
+            # Asserts mask ORIENTATION, not just that something happened: an
+            # inverted or ignored mask still returns a plausible image, and
+            # this is the operation Replacer is built on.
+            try:
+                import base64
+                import io
+                from PIL import Image, ImageChops, ImageStat
+
+                src_img = _decode(first).convert("RGB")
+                mask = Image.new("L", src_img.size, 0)
+                mask.paste(255, (0, 0, src_img.size[0] // 2, src_img.size[1]))  # left half
+                buf = io.BytesIO()
+                mask.save(buf, format="PNG")
+                mask_b64 = base64.b64encode(buf.getvalue()).decode()
+
+                r5 = s.post("/sdapi/v1/img2img", {
+                    "init_images": [first], "mask": mask_b64,
+                    "prompt": "a blue ceramic mug", "steps": 8, "cfg_scale": 5,
+                    "denoising_strength": 0.95, "inpainting_fill": 1,
+                    "inpaint_full_res": False, "mask_blur": 4,
+                    "width": src_img.size[0], "height": src_img.size[1], "seed": 4242,
+                })
+                out_img = _decode((r5.get("images") or [""])[0]).convert("RGB")
+
+                if out_img.size != src_img.size:
+                    record("gpu: inpaint respects the mask", FAIL,
+                           f"size changed {src_img.size} -> {out_img.size}")
+                else:
+                    w, h = src_img.size
+                    def region_diff(box):
+                        d = ImageChops.difference(src_img.crop(box), out_img.crop(box))
+                        return sum(ImageStat.Stat(d).mean) / 3.0
+                    masked = region_diff((0, 0, w // 2, h))
+                    untouched = region_diff((w // 2, 0, w, h))
+                    # Relative, not absolute: the VAE round-trip perturbs the
+                    # whole frame slightly, so an absolute threshold would be
+                    # flaky. The masked half must simply change much more.
+                    if masked < 5.0:
+                        record("gpu: inpaint respects the mask", FAIL,
+                               f"masked region barely changed (mean diff {masked:.1f})")
+                    elif masked <= untouched * 2.0:
+                        record("gpu: inpaint respects the mask", FAIL,
+                               f"mask looks ignored or inverted: masked diff {masked:.1f} "
+                               f"vs untouched {untouched:.1f}")
+                    else:
+                        record("gpu: inpaint respects the mask", PASS,
+                               f"masked {masked:.1f} vs untouched {untouched:.1f} mean diff")
+            except Exception as e:
+                record("gpu: inpaint respects the mask", FAIL,
+                       f"{type(e).__name__}: {str(e)[:150]}\n         server said:\n         "
                        + s.recent_errors())
 
             # --- img2img: consumes an image and returns a changed one --------
@@ -933,6 +1136,8 @@ CHECKS = {
         ("syntax", check_syntax),
         ("deps", check_dependency_conflicts),
         ("pins", check_pins_hold),
+        ("classify", check_downloader_classification),
+        ("filesafety", check_downloader_file_safety),
         ("json", check_json_and_bom),
         ("eol", check_line_endings),
         ("privacy", check_no_personal_files_tracked),
