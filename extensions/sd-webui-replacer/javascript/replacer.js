@@ -224,9 +224,15 @@ function replacer_imageComparisonAddButton() { // https://github.com/Haoming02/s
         }
     }
 
-    if (option === 0) return;
+    if (option === 0) return true;   // feature off: nothing to add, don't retry
 
-    const row = gradioApp().getElementById("image_buttons_replacer").querySelector('.form');
+    // Replacer is a lazily-built tab, so image_buttons_replacer may not exist
+    // yet at load. Return false so the retry below runs again once it mounts,
+    // instead of throwing on .querySelector(null). Idempotent: bail if added.
+    const rowHost = gradioApp().getElementById("image_buttons_replacer");
+    const row = rowHost && rowHost.querySelector('.form');
+    if (!row) return false;
+    if (gradioApp().getElementById("replacer_send_to_comp")) return true;
     const btn = row.lastElementChild.cloneNode();
 
     btn.id = "replacer_send_to_comp";
@@ -248,7 +254,9 @@ function replacer_imageComparisonAddButton() { // https://github.com/Haoming02/s
 
 
     if (is_dedicated && gradioApp().getElementById('extras')) {
-        const rowExtras = gradioApp().getElementById("image_buttons_extras").querySelector('.form');
+        const rowExtrasHost = gradioApp().getElementById("image_buttons_extras");
+        const rowExtras = rowExtrasHost && rowExtrasHost.querySelector('.form');
+        if (!rowExtras) return true;   // Extras not built yet; the replacer button is added
         const btnExtras = rowExtras.lastElementChild.cloneNode();
         btnExtras.id = "replacer_send_to_comp";
         btnExtras.title = "Send images to comparison tab.";
@@ -268,9 +276,19 @@ function replacer_imageComparisonAddButton() { // https://github.com/Haoming02/s
         rowExtras.appendChild(btnExtras);
     }
 
+    return true;
 }
 
-onUiLoaded(replacer_imageComparisonAddButton);
+onUiLoaded(function () {
+    // Replacer's image buttons are in a lazily-built tab, so the button row
+    // usually isn't present at load. Retry until it is (the function returns
+    // false while not ready, and is idempotent once the button is added).
+    if (replacer_imageComparisonAddButton()) return;
+    var obs = new MutationObserver(function () {
+        if (replacer_imageComparisonAddButton()) obs.disconnect();
+    });
+    obs.observe(gradioApp(), {childList: true, subtree: true});
+});
 
 
 function closeAllVideoMasks() {

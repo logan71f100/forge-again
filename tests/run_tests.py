@@ -1290,6 +1290,37 @@ def check_ui_regression() -> None:
             except Exception as e:
                 record("ui: prompt accepts and keeps input", FAIL, str(e)[:200])
 
+            # --- other lazy tabs must open and populate (COLD) ---------------
+            # Settings and Extensions build lazily (gr.render on first open). A
+            # crash in that build shows only when the tab is opened, never at
+            # startup -- which is how a Settings crash ("common.error") and an
+            # Extensions list stuck on "Loading..." both shipped unnoticed.
+            # Done FIRST, before any other tab: the Settings crash only triggers
+            # when Settings is built before Extras (Extras populates the
+            # postprocessing-scripts list its options read), so testing it cold
+            # is what actually guards that regression.
+            for label, tab_id, needle in (
+                ("Settings", "#tab_settings", "common.error"),
+                ("Extensions", "#tab_extensions", "Loading..."),
+            ):
+                try:
+                    page.click(f'button[role=tab]:text-is("{label}")', timeout=15000)
+                    page.wait_for_timeout(3500)
+                    root = page.query_selector(tab_id)
+                    txt = root.inner_text() if root else ""
+                    controls = page.evaluate(
+                        f"() => document.querySelectorAll('{tab_id} input, {tab_id} textarea,"
+                        f" {tab_id} select, {tab_id} table tr').length")
+                    if needle in txt:
+                        record(f"ui: {label} tab renders", FAIL,
+                               f"tab shows '{needle}' -- its lazy build failed")
+                    elif controls == 0:
+                        record(f"ui: {label} tab renders", FAIL, "opened but rendered nothing")
+                    else:
+                        record(f"ui: {label} tab renders", PASS, f"{controls} elements")
+                except Exception as e:
+                    record(f"ui: {label} tab renders", FAIL, f"{type(e).__name__}: {str(e)[:150]}")
+
             # --- tabs must open ---------------------------------------------
             # "the extras tab doesnt open" was a real bug; lazily-built tabs
             # are a gradio-6 specific hazard in this fork.
@@ -1360,33 +1391,6 @@ def check_ui_regression() -> None:
                     record("ui: resize-mode radio responds", FAIL, "clicking changed nothing")
             except Exception as e:
                 record("ui: resize-mode radio responds", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
-
-            # --- other lazy tabs must open and populate ----------------------
-            # Settings and Extensions build lazily (gr.render on first open). A
-            # crash in that build shows only when the tab is opened, never at
-            # startup -- which is how a Settings crash ("common.error") and an
-            # Extensions list stuck on "Loading..." both shipped unnoticed.
-            for label, tab_id, needle in (
-                ("Settings", "#tab_settings", "common.error"),
-                ("Extensions", "#tab_extensions", "Loading..."),
-            ):
-                try:
-                    page.click(f'button[role=tab]:text-is("{label}")', timeout=15000)
-                    page.wait_for_timeout(3500)
-                    root = page.query_selector(tab_id)
-                    txt = root.inner_text() if root else ""
-                    controls = page.evaluate(
-                        f"() => document.querySelectorAll('{tab_id} input, {tab_id} textarea,"
-                        f" {tab_id} select, {tab_id} table tr').length")
-                    if needle in txt:
-                        record(f"ui: {label} tab renders", FAIL,
-                               f"tab shows '{needle}' -- its lazy build failed")
-                    elif controls == 0:
-                        record(f"ui: {label} tab renders", FAIL, "opened but rendered nothing")
-                    else:
-                        record(f"ui: {label} tab renders", PASS, f"{controls} elements")
-                except Exception as e:
-                    record(f"ui: {label} tab renders", FAIL, f"{type(e).__name__}: {str(e)[:150]}")
 
             # --- no JS errors ------------------------------------------------
             # A broad net for gradio-6 breakage that still renders.

@@ -21,9 +21,14 @@ function reportWindowSize() {
     for (var tab of ["txt2img", "img2img"]) {
         var button = gradioApp().getElementById(tab + '_generate_box');
         var target = gradioApp().getElementById(currentlyMobile ? tab + '_results' : tab + '_actions_column');
+        var results = gradioApp().getElementById(tab + '_results');
+        // img2img is a lazily-built tab: these are null until it's first opened.
+        // On a narrow/mobile viewport the early-return above doesn't fire, so
+        // without this guard the img2img iteration threw on insertBefore(null).
+        // Skip that tab until it's built; reportWindowSize re-runs on resize.
+        if (!button || !target || !results) continue;
         target.insertBefore(button, target.firstElementChild);
-
-        gradioApp().getElementById(tab + '_results').classList.toggle('mobile', currentlyMobile);
+        results.classList.toggle('mobile', currentlyMobile);
     }
 }
 
