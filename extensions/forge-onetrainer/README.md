@@ -59,8 +59,10 @@ result appears in `embeddings/` ready to use.
 
 - **SD 1.5 embeddings: verified end to end** — install → train → convert →
   Forge loads the embedding and generates with the token.
-- **SDXL embeddings: implemented but not yet verified end to end.** The config
-  and the `clip_l`/`clip_g` conversion are in place; a real SDXL run may need
-  small adjustments (please report anything that doesn't round-trip).
+- **SDXL embeddings: verified end to end** — trained on the current XL
+  checkpoint, converted (OneTrainer stores `clip_l`/`clip_g` + `_out` variants
+  separately; we emit the `_out` pair), and Forge loads it (shape 2048, correct
+  vector count) and generates with the token. Trains at 768px within ~11 GB
+  thanks to latent caching.
 - LoRA and full fine-tuning are out of scope (use OneTrainer's own GUI). Flux
   embedding training isn't wired up.

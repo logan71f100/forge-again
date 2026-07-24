@@ -387,27 +387,28 @@ def _convert_for_forge(path, name, mode):
         from safetensors.torch import load_file, save_file
         import torch
         d = load_file(path)
-        vec = d.get("emp_params_out")           # the trained/EMA output vector
-        if vec is None:
-            vec = d.get("emp_params")
-        if vec is None:
-            # Already single-tensor or an unexpected layout — leave as-is.
-            return len(d) == 1
-        if vec.dim() == 1:
-            vec = vec.unsqueeze(0)
 
-        if mode == "xl":
-            # SDXL embeddings carry both encoders. OneTrainer concatenates them
-            # as (vectors, 768+1280); split back into Forge's clip_l / clip_g.
-            if vec.shape[-1] == 768 + 1280:
-                out = {"clip_l": vec[:, :768].clone(),
-                       "clip_g": vec[:, 768:].clone()}
-            elif "clip_l" in d and "clip_g" in d:
-                out = {"clip_l": d["clip_l"], "clip_g": d["clip_g"]}
-            else:
-                return False        # unknown SDXL layout; don't guess
+        def pick(*keys):
+            for k in keys:
+                if k in d:
+                    v = d[k]
+                    return v.unsqueeze(0) if v.dim() == 1 else v
+            return None
+
+        # SDXL: OneTrainer stores the two encoders as SEPARATE keys
+        # (clip_l/clip_g, plus *_out EMA/output variants) -- NOT a concatenated
+        # tensor. Forge's SDXL loader wants exactly clip_l + clip_g, so emit
+        # those, preferring the trained output vectors.
+        if "clip_l" in d and "clip_g" in d:
+            out = {"clip_l": pick("clip_l_out", "clip_l"),
+                   "clip_g": pick("clip_g_out", "clip_g")}
         else:
-            out = {name: vec}       # SD 1.5: single tensor, Forge accepts it
+            # SD 1.5: a single 768-dim vector under emp_params[_out]. Forge's
+            # diffuser-concept branch accepts a one-tensor dict.
+            vec = pick("emp_params_out", "emp_params")
+            if vec is None:
+                return len(d) == 1      # already single-tensor / unknown; leave
+            out = {name: vec}
 
         save_file({k: v.contiguous().to(torch.float32) for k, v in out.items()}, path)
         return True
