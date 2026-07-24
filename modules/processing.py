@@ -1423,7 +1423,13 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             fp_additional_modules = getattr(shared.opts, 'forge_additional_modules')
 
             reload = False
-            if hasattr(self, 'hr_additional_modules') and 'Use same choices' not in self.hr_additional_modules:
+            # hr_additional_modules defaults to None. The UI always fills it in,
+            # but an API caller need not -- and hasattr() is True for a None
+            # attribute, so the membership test raised TypeError and failed
+            # every API hires-fix request. None means "use same choices", i.e.
+            # nothing to change. Mirrors the isinstance guard used for this
+            # same field in setup_prompts above.
+            if isinstance(self.hr_additional_modules, list) and 'Use same choices' not in self.hr_additional_modules:
                 modules_changed = main_entry.modules_change(self.hr_additional_modules, save=False, refresh=False)
                 if modules_changed:
                     reload = True
