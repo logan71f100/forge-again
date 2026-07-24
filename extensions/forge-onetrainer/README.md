@@ -47,8 +47,20 @@ Plus OneTrainer's own defaults for the rest (crop jitter, random flip, mixed
 precision). For the full parameter set, edit the generated `config.json` under
 `work/<run>/`, or use OneTrainer's own GUI and export a config.
 
-## Scope
+## Format conversion
 
-Textual-inversion embeddings on **SD 1.5** and **SDXL**. LoRA and full
-fine-tuning are out of scope here (OneTrainer does them; use its GUI). Flux
-embedding training isn't wired up yet.
+OneTrainer saves embeddings with its own two-key layout (`emp_params`,
+`emp_params_out`), which Forge's loader doesn't accept. After training, the
+extension automatically rewrites the file into a Forge-loadable form — a
+single-tensor file for SD 1.5, or a `clip_l`/`clip_g` pair for SDXL — so the
+result appears in `embeddings/` ready to use.
+
+## Scope and status
+
+- **SD 1.5 embeddings: verified end to end** — install → train → convert →
+  Forge loads the embedding and generates with the token.
+- **SDXL embeddings: implemented but not yet verified end to end.** The config
+  and the `clip_l`/`clip_g` conversion are in place; a real SDXL run may need
+  small adjustments (please report anything that doesn't round-trip).
+- LoRA and full fine-tuning are out of scope (use OneTrainer's own GUI). Flux
+  embedding training isn't wired up.
