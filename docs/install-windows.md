@@ -16,8 +16,17 @@ model, runs in 11 GB via offloading and VRAM hibernate — more VRAM is just fas
 
 ## Install
 
+Get the code either way:
+
+- [**⬇ Download the latest release**](https://github.com/logan71f100/forge-again/releases/latest) — grab the source zip under "Assets" and extract it. No git needed.
+- Or clone it (**recommended**): `git clone https://github.com/logan71f100/forge-again`
+
+Cloning is preferred because Forge uses git for extension management, in-app updates and
+version reporting. A zip runs perfectly well, you just lose those.
+
+Then:
+
 ```
-git clone https://github.com/logan71f100/forge-again
 cd forge-again
 start.bat
 ```

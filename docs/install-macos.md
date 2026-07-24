@@ -18,6 +18,10 @@ genuinely different code path from the CUDA one everything else is tested agains
 
 ## Install
 
+Get the code — [**⬇ latest release**](https://github.com/logan71f100/forge-again/releases/latest)
+(source zip/tarball under "Assets"), or clone it, which is **recommended** since Forge uses
+git for extension management, updates and version info:
+
 ```bash
 git clone https://github.com/logan71f100/forge-again
 cd forge-again

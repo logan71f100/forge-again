@@ -13,6 +13,11 @@ from replacer.options import useFastDilation, getMaskColorStr, EXT_ROOT_DIRECTOR
 
 try:
     REPLACER_VERSION = git.Repo(__file__, search_parent_directories=True).head.object.hexsha[:7]
+except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError):
+    # No .git alongside the code: a release-zip download or a container image.
+    # Both are supported ways to install, so this is not an error -- there is
+    # simply no commit to report. Stay quiet rather than dumping a traceback.
+    REPLACER_VERSION = "None"
 except Exception:
     errors.report(f"Error reading replacer git info from {__file__}", exc_info=True)
     REPLACER_VERSION = "None"

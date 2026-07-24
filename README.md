@@ -51,10 +51,18 @@ Pick your platform — each guide has its own setup steps, caveats and recommend
 
 "Verified" means it was actually built and run on that platform, not just expected to work.
 
-The short version:
+**Get the code** — [**⬇ Download the latest release**](https://github.com/logan71f100/forge-again/releases/latest), or clone it:
 
 ```
 git clone https://github.com/logan71f100/forge-again
+```
+
+Cloning is recommended: Forge uses git for extension management, updates and version
+info, so a downloaded zip loses those (it still runs fine otherwise).
+
+The short version:
+
+```
 cd forge-again
 start.bat            # Windows        (optionally: start.bat sd|xl|flux)
 ./start.sh           # Linux

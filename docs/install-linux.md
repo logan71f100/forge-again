@@ -22,6 +22,10 @@ Python 3.12 and the torch wheels bring their own CUDA runtime.
 
 ## Native install
 
+Get the code — [**⬇ latest release**](https://github.com/logan71f100/forge-again/releases/latest)
+(source zip/tarball under "Assets"), or clone it, which is **recommended** since Forge uses
+git for extension management, updates and version info:
+
 ```bash
 git clone https://github.com/logan71f100/forge-again
 cd forge-again
