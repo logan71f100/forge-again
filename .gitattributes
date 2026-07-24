@@ -6,3 +6,7 @@
 
 # bundled llama-server (patched build with /sleep + /wake) — binary, never text-convert
 forge-llm/** binary
+
+# ...except the source patch + its docs, which must stay diffable/reviewable.
+# LF-pinned so `git apply` works regardless of the checkout platform.
+forge-llm/patches/** text eol=lf diff

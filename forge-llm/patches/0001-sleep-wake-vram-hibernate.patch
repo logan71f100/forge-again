@@ -1,0 +1,711 @@
+diff --git a/include/llama.h b/include/llama.h
+index b89ab75..b223ad3 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -1001,6 +1001,13 @@ extern "C" {
+     // and is not necessary to call it explicitly in most cases
+     LLAMA_API void llama_synchronize(struct llama_context * ctx);
+ 
++    // GPU sleep/wake: release all VRAM held by this context (compute buffers,
++    // model weights, and KV cache) by moving weights + KV to host RAM, then
++    // reclaim it on wake. KV cache contents (including image embeddings) are
++    // preserved across a sleep/wake cycle. No decoding may occur while asleep.
++    LLAMA_API void llama_sleep(struct llama_context * ctx);
++    LLAMA_API void llama_wake (struct llama_context * ctx);
++
+     // Token logits obtained from the last call to llama_decode()
+     // The logits for which llama_batch.logits[i] != 0 are stored contiguously
+     // in the order they have appeared in the batch.
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 320784c..ae9ef93 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -19,6 +19,7 @@ add_library(llama
+             llama-cparams.cpp
+             llama-grammar.cpp
+             llama-graph.cpp
++            llama-hibernate.cpp
+             llama-hparams.cpp
+             llama-impl.cpp
+             llama-io.cpp
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 0465430..548482d 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -681,6 +681,45 @@ void llama_context::sched_reserve() {
+             __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
+ }
+ 
++void llama_context::gpu_sleep() {
++    synchronize();
++
++    // free scratch compute buffers (recreated on wake via sched_reserve)
++    sched.reset();
++    gf_res_prev.reset();
++    gf_res_reserve.reset();
++    sched_need_reserve = true;
++
++    // free the host output buffer (re-reserved on wake)
++    buf_output.reset();
++
++    // hibernate KV cache device buffers to host RAM
++    if (memory) {
++        memory->gpu_sleep();
++    }
++
++    // hibernate model weight device buffers to host RAM
++    const_cast<llama_model &>(model).gpu_sleep();
++
++    LLAMA_LOG_INFO("%s: GPU asleep (VRAM released)\n", __func__);
++}
++
++void llama_context::gpu_wake() {
++    // restore weights first, then KV, so sched reserve sees a live memory module
++    const_cast<llama_model &>(model).gpu_wake();
++
++    if (memory) {
++        memory->gpu_wake();
++    }
++
++    // recreate scratch compute buffers and the output buffer
++    sched_need_reserve = true;
++    sched_reserve();
++    output_reserve(cparams.n_seq_max);
++
++    LLAMA_LOG_INFO("%s: GPU awake (VRAM reclaimed)\n", __func__);
++}
++
+ void llama_context::synchronize() {
+     if (!sched) {
+         return;
+@@ -3661,6 +3700,14 @@ void llama_synchronize(llama_context * ctx) {
+     ctx->synchronize();
+ }
+ 
++void llama_sleep(llama_context * ctx) {
++    ctx->gpu_sleep();
++}
++
++void llama_wake(llama_context * ctx) {
++    ctx->gpu_wake();
++}
++
+ float * llama_get_logits(llama_context * ctx) {
+     ctx->synchronize();
+ 
+diff --git a/src/llama-context.h b/src/llama-context.h
+index f8b7805..5eba63f 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -55,6 +55,11 @@ struct llama_context {
+     //   - etc.
+     void sched_reserve();
+ 
++    // GPU sleep/wake: free all VRAM (compute buffers + weights + KV to host RAM),
++    // then reclaim it, without losing KV state. See llama_sleep()/llama_wake().
++    void gpu_sleep();
++    void gpu_wake();
++
+     void synchronize();
+ 
+     const llama_model   & get_model()   const;
+diff --git a/src/llama-hibernate.cpp b/src/llama-hibernate.cpp
+new file mode 100644
+index 0000000..67a92d5
+--- /dev/null
++++ b/src/llama-hibernate.cpp
+@@ -0,0 +1,88 @@
++#include "llama-hibernate.h"
++
++#include "llama-impl.h"
++
++static size_t llama_hib_total_bytes(ggml_context * ctx) {
++    size_t total = 0;
++    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
++        if (t->view_src == nullptr && t->data != nullptr) {
++            total += ggml_nbytes(t);
++        }
++    }
++    return total;
++}
++
++bool llama_hib_save(ggml_context * ctx, ggml_backend_buffer_type_t buft, llama_hib_ctx & h) {
++    const size_t total = llama_hib_total_bytes(ctx);
++    if (total == 0) {
++        h.buft = nullptr;
++        return false;
++    }
++
++    // stage into pinned host memory when possible: the GPU can DMA from/to it
++    // at full PCIe bandwidth, roughly 2x faster than pageable memory.
++    // reuse a previously allocated pinned buffer across sleep/wake cycles.
++    uint8_t * dst = nullptr;
++    if (h.host_buf && ggml_backend_buffer_get_size(h.host_buf.get()) >= total) {
++        dst = (uint8_t *) ggml_backend_buffer_get_base(h.host_buf.get());
++    } else {
++        h.host_buf.reset();
++        ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
++        ggml_backend_buffer_type_t hbuft = dev ? ggml_backend_dev_host_buffer_type(dev) : nullptr;
++        if (hbuft != nullptr) {
++            h.host_buf.reset(ggml_backend_buft_alloc_buffer(hbuft, total));
++            if (h.host_buf) {
++                dst = (uint8_t *) ggml_backend_buffer_get_base(h.host_buf.get());
++            } else {
++                LLAMA_LOG_WARN("%s: pinned staging alloc of %.2f MiB failed, using pageable memory\n",
++                        __func__, total / 1024.0 / 1024.0);
++            }
++        }
++    }
++    if (dst == nullptr) {
++        h.blob.resize(total);
++        dst = h.blob.data();
++    }
++
++    h.buft = buft;
++    size_t off = 0;
++    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
++        if (t->view_src == nullptr && t->data != nullptr) {
++            const size_t nb = ggml_nbytes(t);
++            ggml_backend_tensor_get(t, dst + off, 0, nb);
++            off += nb;
++        }
++    }
++    return true;
++}
++
++void llama_hib_reset(ggml_context * ctx) {
++    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
++        t->data   = nullptr;
++        t->buffer = nullptr;
++    }
++}
++
++ggml_backend_buffer_t llama_hib_restore(ggml_context * ctx, llama_hib_ctx & h) {
++    // allocator requires the context to be in no_alloc mode
++    ggml_set_no_alloc(ctx, true);
++
++    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, h.buft);
++    if (buf == nullptr) {
++        return nullptr;
++    }
++
++    const uint8_t * src = h.data();
++    size_t off = 0;
++    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
++        if (t->view_src == nullptr && t->data != nullptr) {
++            const size_t nb = ggml_nbytes(t);
++            ggml_backend_tensor_set(t, src + off, 0, nb);
++            off += nb;
++        }
++    }
++
++    // keep host_buf (pinned) allocated for the next sleep; just mark not-hibernated
++    h.buft = nullptr;
++    return buf;
++}
+diff --git a/src/llama-hibernate.h b/src/llama-hibernate.h
+new file mode 100644
+index 0000000..bca8b12
+--- /dev/null
++++ b/src/llama-hibernate.h
+@@ -0,0 +1,44 @@
++#pragma once
++
++// GPU sleep/wake: move a ggml_context's device tensors out to host RAM and back,
++// freeing/reclaiming VRAM without destroying the context (so KV state survives).
++// Added for the Forge AI Assistant VRAM-juggle use case.
++//
++// The host copy lives in a PINNED (page-locked) buffer so the GPU can DMA at
++// full PCIe bandwidth. The pinned buffer is allocated on the first sleep and
++// kept across sleep/wake cycles, so repeat juggles pay only the copy cost.
++// Falls back to pageable memory if pinned allocation is unavailable/fails.
++
++#include "ggml.h"
++#include "ggml-alloc.h"
++#include "ggml-backend.h"
++#include "ggml-cpp.h"
++
++#include <vector>
++#include <cstdint>
++
++// saved host copy of one ggml_context's device tensor data
++struct llama_hib_ctx {
++    ggml_backend_buffer_type_t buft = nullptr;   // non-null => this ctx is currently hibernated
++
++    ggml_backend_buffer_ptr host_buf;            // pinned staging (preferred, persists across cycles)
++    std::vector<uint8_t>    blob;                // pageable fallback
++
++    uint8_t * data() const {
++        return host_buf ? (uint8_t *) ggml_backend_buffer_get_base(host_buf.get())
++                        : const_cast<uint8_t *>(blob.data());
++    }
++};
++
++// Copy all non-view tensor data of ctx into h's staging memory and record buft.
++// Returns true if there was device data to save. Does NOT free buffers.
++bool llama_hib_save(ggml_context * ctx, ggml_backend_buffer_type_t buft, llama_hib_ctx & h);
++
++// Null every tensor's data/buffer pointer so the allocator will re-allocate them.
++// Call AFTER freeing the ctx's backend buffer(s).
++void llama_hib_reset(ggml_context * ctx);
++
++// Re-allocate the ctx's tensors into a fresh buffer of h.buft and restore the
++// saved data. Returns the new buffer (owned by caller), or nullptr on failure.
++// Clears h.buft but keeps the pinned staging buffer for the next sleep.
++ggml_backend_buffer_t llama_hib_restore(ggml_context * ctx, llama_hib_ctx & h);
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 680de51..cd3c191 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -695,6 +695,46 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown()
+     return ret;
+ }
+ 
++void llama_kv_cache::gpu_sleep() {
++    if (sleeping) {
++        return;
++    }
++    // resize (not assign) so pinned staging buffers persist across juggle cycles
++    hib.resize(ctxs_bufs.size());
++    for (size_t i = 0; i < ctxs_bufs.size(); i++) {
++        auto & ctx = ctxs_bufs[i].first;
++        auto & buf = ctxs_bufs[i].second;
++        if (!buf || ggml_backend_buffer_is_host(buf.get())) {
++            continue;
++        }
++        const ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf.get());
++        if (llama_hib_save(ctx.get(), buft, hib[i])) {
++            buf.reset();                  // release VRAM
++            llama_hib_reset(ctx.get());
++        }
++    }
++    sleeping = true;
++}
++
++void llama_kv_cache::gpu_wake() {
++    if (!sleeping) {
++        return;
++    }
++    for (size_t i = 0; i < ctxs_bufs.size(); i++) {
++        if (i >= hib.size() || hib[i].buft == nullptr) {
++            continue;
++        }
++        auto & ctx = ctxs_bufs[i].first;
++        auto & buf = ctxs_bufs[i].second;
++        ggml_backend_buffer_t nb = llama_hib_restore(ctx.get(), hib[i]);
++        if (nb != nullptr) {
++            buf.reset(nb);
++        }
++    }
++    // note: hib entries keep their pinned staging buffers for the next sleep
++    sleeping = false;
++}
++
+ llama_memory_context_ptr llama_kv_cache::init_batch(
+             llama_batch_allocr & balloc,
+             uint32_t n_ubatch,
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 531d99d..431e8c8 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -2,6 +2,7 @@
+ 
+ #include "llama-batch.h"
+ #include "llama-graph.h"
++#include "llama-hibernate.h"
+ #include "llama-kv-cells.h"
+ #include "llama-memory.h"
+ 
+@@ -144,6 +145,9 @@ public:
+ 
+     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+ 
++    void gpu_sleep() override;
++    void gpu_wake()  override;
++
+     // state write/load
+ 
+     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
+@@ -265,6 +269,10 @@ private:
+     // ggml contexts for the KV cache along with the allocated backend buffers:
+     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+ 
++    // GPU sleep/wake: host copies of hibernated device buffers, parallel to ctxs_bufs
++    std::vector<llama_hib_ctx> hib;
++    bool sleeping = false;
++
+     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
+     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
+     std::vector<uint32_t> v_heads;
+diff --git a/src/llama-memory.h b/src/llama-memory.h
+index db82539..5f58004 100644
+--- a/src/llama-memory.h
++++ b/src/llama-memory.h
+@@ -118,6 +118,14 @@ struct llama_memory_i {
+ 
+     virtual std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const = 0;
+ 
++    //
++    // GPU sleep/wake: move device buffers to host RAM (freeing VRAM) and back.
++    // Default no-op for memory types that hold no device buffers.
++    //
++
++    virtual void gpu_sleep() {}
++    virtual void gpu_wake()  {}
++
+     //
+     // state write/read
+     //
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index adacf70..e46447e 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "llama-arch.h"
+ #include "llama-ext.h"
++#include "llama-hibernate.h"
+ #include "llama-hparams.h"
+ #include "llama-impl.h"
+ #include "llama-mmap.h"
+@@ -1001,6 +1002,10 @@ struct llama_model::impl {
+     // contexts where the model tensors metadata is stored as well as the corresponding buffers:
+     std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
+ 
++    // GPU sleep/wake: host copies of hibernated device buffers, parallel to ctxs_bufs
++    std::vector<llama_hib_ctx> hib;
++    bool sleeping = false;
++
+     buft_list_t cpu_buft_list;
+     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
+ 
+@@ -2025,6 +2030,46 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
+     return layers[il].rope_short;
+ }
+ 
++void llama_model::gpu_sleep() {
++    if (pimpl->sleeping) {
++        return;
++    }
++    // resize (not assign) so pinned staging buffers persist across juggle cycles
++    pimpl->hib.resize(pimpl->ctxs_bufs.size());
++    for (size_t i = 0; i < pimpl->ctxs_bufs.size(); i++) {
++        auto & ctx  = pimpl->ctxs_bufs[i].first;
++        auto & bufs = pimpl->ctxs_bufs[i].second;
++        if (bufs.empty() || ggml_backend_buffer_is_host(bufs[0].get())) {
++            continue; // host (mmap/CPU) buffers stay resident
++        }
++        const ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(bufs[0].get());
++        if (llama_hib_save(ctx.get(), buft, pimpl->hib[i])) {
++            bufs.clear();                 // release VRAM (unique_ptr frees the buffers)
++            llama_hib_reset(ctx.get());   // null tensor->data/->buffer for re-alloc
++        }
++    }
++    pimpl->sleeping = true;
++}
++
++void llama_model::gpu_wake() {
++    if (!pimpl->sleeping) {
++        return;
++    }
++    for (size_t i = 0; i < pimpl->ctxs_bufs.size(); i++) {
++        if (i >= pimpl->hib.size() || pimpl->hib[i].buft == nullptr) {
++            continue; // was not hibernated
++        }
++        auto & ctx  = pimpl->ctxs_bufs[i].first;
++        auto & bufs = pimpl->ctxs_bufs[i].second;
++        ggml_backend_buffer_t buf = llama_hib_restore(ctx.get(), pimpl->hib[i]);
++        if (buf != nullptr) {
++            bufs.emplace_back(buf);       // model owns the buffer again
++        }
++    }
++    // note: hib entries keep their pinned staging buffers for the next sleep
++    pimpl->sleeping = false;
++}
++
+ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
+     llama_memory_i * res;
+ 
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 45b054c..44057ab 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -670,6 +670,10 @@ struct llama_model {
+ 
+     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
+ 
++    // GPU sleep/wake: move device weight buffers to host RAM (freeing VRAM) and back.
++    void gpu_sleep();
++    void gpu_wake();
++
+     ggml_cgraph * build_graph(const llm_graph_params & params) const;
+ 
+     virtual void load_stats  (llama_model_loader & ml) = 0;
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index bb3b91a..49e823e 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -771,8 +771,8 @@ struct server_slot {
+             // if res != 0, batch is full or chunk is not compatible -> this loop breaks
+         }
+ 
+-        // TODO @ngxson : move this log line to debug when it become more stable
+-        SLT_TRC(*this, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
++        SLT_INF(*this, "ENCODING %d image chunk(s) (idx %zu) — the slow vision step\n", n_added, idx);
++        const int64_t t_enc0 = ggml_time_ms();
+ 
+         res = mtmd_batch_encode(mbatch.get());
+         if (res != 0) {
+@@ -780,6 +780,8 @@ struct server_slot {
+             return -1;
+         }
+ 
++        SLT_INF(*this, "image chunk(s) encoded in %.1f s\n", (ggml_time_ms() - t_enc0) / 1000.0);
++
+         return try_decode();
+     }
+ };
+@@ -935,6 +937,13 @@ private:
+ 
+     bool sleeping = false;
+ 
++    // fast VRAM hibernate: saved params to rebuild the vision encoder on wake
++    // (the encoder is stateless, so it is freed on sleep and reloaded on wake;
++    //  the KV cache with encoded image embeddings survives via llama_sleep/wake)
++    bool                fast_has_mmproj = false;
++    std::string         fast_mmproj_path;
++    mtmd_context_params fast_mparams;
++
+     int64_t t_last_load_progress_ms = 0;
+ 
+     void destroy() {
+@@ -954,13 +963,53 @@ private:
+     void handle_sleeping_state(bool new_state) {
+         GGML_ASSERT(sleeping != new_state);
+         if (new_state) {
+-            SRV_INF("%s", "server is entering sleeping state\n");
+-            destroy();
++            // Fast VRAM hibernate: move model weights + KV cache to host RAM and
++            // free all VRAM, WITHOUT destroying the context. The KV cache (which
++            // holds already-encoded image embeddings) is preserved, so waking up
++            // needs no reload from disk and no image re-encode.
++            SRV_INF("%s", "server is entering sleeping state (fast VRAM hibernate)\n");
++            const int64_t t0 = ggml_time_ms();
++
++            // vision encoder is stateless: free its VRAM, reload on wake
++            // (slots cache the mctx pointer — null those too or they dangle)
++            if (mctx != nullptr) {
++                mtmd_free(mctx);
++                mctx = nullptr;
++                for (server_slot & slot : slots) {
++                    slot.mctx = nullptr;
++                }
++            }
++            if (ctx_dft) {
++                llama_sleep(ctx_dft.get());
++            }
++            if (ctx_tgt != nullptr) {
++                llama_sleep(ctx_tgt);
++            }
++
++            SRV_INF("hibernated to host RAM in %.2f s\n", (ggml_time_ms() - t0) / 1000.0);
+         } else {
+-            SRV_INF("%s", "server is exiting sleeping state\n");
+-            if (!load_model(params_base)) {
+-                GGML_ABORT("failed to reload model after sleeping");
++            SRV_INF("%s", "server is exiting sleeping state (fast VRAM restore)\n");
++            const int64_t t0 = ggml_time_ms();
++
++            if (ctx_tgt != nullptr) {
++                llama_wake(ctx_tgt);
+             }
++            if (ctx_dft) {
++                llama_wake(ctx_dft.get());
++            }
++
++            // rebuild the (stateless) vision encoder and refresh every cached copy
++            if (fast_has_mmproj) {
++                mctx = mtmd_init_from_file(fast_mmproj_path.c_str(), model_tgt, fast_mparams);
++                if (mctx == nullptr) {
++                    GGML_ABORT("failed to reload multimodal model after sleeping");
++                }
++                for (server_slot & slot : slots) {
++                    slot.mctx = mctx;
++                }
++            }
++
++            SRV_INF("restored from host RAM in %.2f s\n", (ggml_time_ms() - t0) / 1000.0);
+         }
+         sleeping = new_state;
+     }
+@@ -1270,6 +1319,14 @@ private:
+             }
+             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
+ 
++            // remember how to rebuild the vision encoder for fast wake (drop the
++            // progress callback, which points at a stack object from this call)
++            fast_has_mmproj  = true;
++            fast_mmproj_path = mmproj_path;
++            fast_mparams     = mparams;
++            fast_mparams.progress_callback           = nullptr;
++            fast_mparams.progress_callback_user_data = nullptr;
++
+             if (params_base.ctx_shift) {
+                 params_base.ctx_shift = false;
+                 SRV_WRN("%s\n", "ctx_shift is not supported by multimodal, it will be disabled");
+@@ -3363,6 +3420,31 @@ private:
+                         slot.n_prompt_tokens_cache = n_past;
+                         slot.n_prompt_tokens_processed = 0;
+ 
++                        // make cache reuse visible: exactly how much is reused vs
++                        // re-processed, and how many images must be re-encoded
++                        if (input_tokens.has_mtmd) {
++                            int n_img_total = 0, n_img_cached = 0;
++                            size_t i_chunk = 0;
++                            while (true) {
++                                auto [chunk_p, idx_c] = input_tokens.find_next_media_chunk(i_chunk);
++                                if (chunk_p == nullptr) {
++                                    break;
++                                }
++                                const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk_p->get());
++                                n_img_total++;
++                                if (idx_c + n_tok <= (size_t) n_past) {
++                                    n_img_cached++;
++                                }
++                                i_chunk = idx_c;
++                            }
++                            SLT_INF(slot, "prompt: %d tokens (%d from cache, %d new) | images: %d total, %d from cache, %d to ENCODE\n",
++                                    slot.task->n_tokens(), n_past, slot.task->n_tokens() - n_past,
++                                    n_img_total, n_img_cached, n_img_total - n_img_cached);
++                        } else {
++                            SLT_INF(slot, "prompt: %d tokens (%d from cache, %d new)\n",
++                                    slot.task->n_tokens(), n_past, slot.task->n_tokens() - n_past);
++                        }
++
+                         slot.prompt.tokens.keep_first(n_past);
+ 
+                         // this is to signal the client that the request has started processing
+@@ -4554,6 +4636,29 @@ void server_routes::init_routes() {
+         return res;
+     };
+ 
++    // Fast VRAM hibernate: free all VRAM (weights + KV to host RAM) so another
++    // process can use the GPU, without losing conversation/KV state. bypass_sleep
++    // so these endpoints do not themselves trigger a wake on entry.
++    this->post_sleep = [this](const server_http_req &) {
++        auto res = create_response(true);
++        queue_tasks.request_sleep();
++        res->ok(json {
++            { "success",     true },
++            { "is_sleeping", queue_tasks.is_sleeping() },
++        });
++        return res;
++    };
++
++    this->post_wake = [this](const server_http_req &) {
++        auto res = create_response(true);
++        queue_tasks.wait_until_no_sleep();
++        res->ok(json {
++            { "success",     true },
++            { "is_sleeping", queue_tasks.is_sleeping() },
++        });
++        return res;
++    };
++
+     this->get_props = [this](const server_http_req &) {
+         auto res = create_response(true);
+ 
+diff --git a/tools/server/server-context.h b/tools/server/server-context.h
+index f9ab113..5545a5d 100644
+--- a/tools/server/server-context.h
++++ b/tools/server/server-context.h
+@@ -153,6 +153,8 @@ struct server_routes {
+     server_http_context::handler_t post_rerank;
+     server_http_context::handler_t get_lora_adapters;
+     server_http_context::handler_t post_lora_adapters;
++    server_http_context::handler_t post_sleep;
++    server_http_context::handler_t post_wake;
+ 
+     // to be used in router mode
+     json get_model_info() const;
+diff --git a/tools/server/server-queue.cpp b/tools/server/server-queue.cpp
+index 5d37c34..195be68 100644
+--- a/tools/server/server-queue.cpp
++++ b/tools/server/server-queue.cpp
+@@ -116,6 +116,19 @@ void server_queue::wait_until_no_sleep() {
+     }
+ }
+ 
++void server_queue::request_sleep() {
++    std::unique_lock<std::mutex> lock(mutex_tasks);
++    if (sleeping) {
++        return;
++    }
++    QUE_DBG("%s", "requesting to start sleeping\n");
++    req_start_sleeping = true;
++    condition_tasks.notify_all(); // wake the main loop's wait so it re-checks
++    condition_tasks.wait(lock, [&]{
++        return (sleeping || !running);
++    });
++}
++
+ void server_queue::terminate() {
+     std::unique_lock<std::mutex> lock(mutex_tasks);
+     running = false;
+@@ -129,6 +142,9 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
+     constexpr auto max_wait_time = std::chrono::seconds(1);
+     auto should_sleep = [&]() -> bool {
+         // caller must hold mutex_tasks
++        if (req_start_sleeping) {
++            return true; // explicit trigger via request_sleep()
++        }
+         if (idle_sleep_ms < 0) {
+             return false;
+         }
+@@ -179,7 +195,9 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
+                 QUE_INF("%s", "entering sleeping state\n");
+                 sleeping = true;
+                 callback_sleeping_state(true);
++                req_start_sleeping = false;
+                 req_stop_sleeping = false;
++                condition_tasks.notify_all(); // notify request_sleep() waiters
+                 // wait until we are requested to exit sleeping state
+                 condition_tasks.wait(lock, [&]{
+                     return (!running || req_stop_sleeping);
+diff --git a/tools/server/server-queue.h b/tools/server/server-queue.h
+index 0b674d6..e487c56 100644
+--- a/tools/server/server-queue.h
++++ b/tools/server/server-queue.h
+@@ -16,6 +16,7 @@ private:
+     bool running  = false;
+     bool sleeping = false;
+     bool req_stop_sleeping = false;
++    bool req_start_sleeping = false; // explicit sleep trigger (see request_sleep)
+     int64_t time_last_task = 0;
+ 
+     // queues
+@@ -51,6 +52,10 @@ public:
+     // returns immediately if not sleeping
+     void wait_until_no_sleep();
+ 
++    // explicitly request entering sleep state now (ignores idle timer) and wait
++    // until it is done; returns immediately if already sleeping
++    void request_sleep();
++
+     bool is_sleeping() {
+         std::unique_lock<std::mutex> lock(mutex_tasks);
+         return sleeping;
+diff --git a/tools/server/server.cpp b/tools/server/server.cpp
+index eafef86..bc194c8 100644
+--- a/tools/server/server.cpp
++++ b/tools/server/server.cpp
+@@ -243,6 +243,9 @@ int llama_server(int argc, char ** argv) {
+     // Save & load slots
+     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
+     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
++    // Fast VRAM hibernate (free/reclaim GPU memory while preserving KV state)
++    ctx_http.post("/sleep",                    ex_wrapper(routes.post_sleep));
++    ctx_http.post("/wake",                     ex_wrapper(routes.post_wake));
+ 
+     // resumable streaming, the conversation_id is the session identity end to end. router and
+     // child wire different handlers under the same paths: a child binds the local g_stream_sessions
