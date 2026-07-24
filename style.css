@@ -1787,3 +1787,26 @@ span[data-testid="block-info"]{
     0%, 100% { opacity: 1; }
     50% { opacity: 0.55; }
 }
+
+/* the input control an error was attributed to (javascript/errorHighlight.js) */
+.error-field-highlight{
+    outline: 2px solid #dc2626 !important;
+    outline-offset: 3px;
+    border-radius: 6px;
+    animation: error-field-pulse 1.2s ease-in-out 3;
+}
+@keyframes error-field-pulse{
+    0%, 100% { outline-color: #dc2626; }
+    50% { outline-color: rgba(220, 38, 38, 0.25); }
+}
+
+/* plain-language hint rendered under a recognizable error (modules/error_tips.py) */
+.error-tip{
+    margin-top: 0.5em;
+    padding: 0.5em 0.75em;
+    border-left: 3px solid #d97706;
+    background: rgba(217, 119, 6, 0.08);
+    color: inherit;
+    font-weight: normal;
+    text-align: left;
+}

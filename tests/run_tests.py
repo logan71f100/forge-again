@@ -256,6 +256,59 @@ def check_downloader_classification() -> None:
         record("downloader: filename classification", PASS, f"{len(CLASSIFY_CASES)} cases")
 
 
+def check_error_tips() -> None:
+    """Recognizable runtime errors must map to a plain-language tip (issue #12)."""
+    import importlib.util
+    path = os.path.join(ROOT, "modules", "error_tips.py")
+    try:
+        spec = importlib.util.spec_from_file_location("error_tips", path)
+        et = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(et)
+    except Exception as e:
+        record("error-tips: module imports", FAIL, f"{type(e).__name__}: {e}")
+        return
+
+    cases = [
+        # the exact error from an SD 1.5 ControlNet on an SDXL checkpoint
+        ("RuntimeError: mat1 and mat2 shapes cannot be multiplied (154x2048 and 768x320)",
+         ("ControlNet", "SDXL", "SD 1.5")),
+        ("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.50 GiB",
+         ("GPU Weights",)),
+        ("RuntimeError: Expected all tensors to be on the same device, but found at least two devices",
+         ("refresh",)),
+        ("AttributeError: 'NoneType' object has no attribute 'mode'",
+         ("image",)),
+    ]
+    problems = []
+    for msg, must_contain in cases:
+        tip = et.tip_for(msg)
+        if not tip:
+            problems.append(f"no tip for: {msg[:60]}")
+            continue
+        missing = [w for w in must_contain if w not in tip]
+        if missing:
+            problems.append(f"tip for {msg[:40]!r} lacks {missing}")
+    # an unrecognized error must NOT get a (necessarily wrong) tip
+    if et.tip_for("ValueError: something entirely novel happened") is not None:
+        problems.append("unknown error produced a tip -- tips must only fire on known patterns")
+
+    # field attribution (issue #6): attributable errors carry the selector of
+    # the responsible control for errorHighlight.js
+    field_cases = [
+        ("mat1 and mat2 shapes cannot be multiplied (154x2048 and 768x320)", "#{tab}_controlnet"),
+        ("AttributeError: 'NoneType' object has no attribute 'mode'", "#{tab}_image"),
+        ("ValueError: something entirely novel happened", None),
+    ]
+    for msg, want_field in field_cases:
+        _, got_field = et.tip_and_field_for(msg)
+        if got_field != want_field:
+            problems.append(f"field for {msg[:40]!r}: expected {want_field!r}, got {got_field!r}")
+    if problems:
+        record("error-tips: known errors produce tips", FAIL, "\n         ".join(problems[:6]))
+    else:
+        record("error-tips: known errors produce tips", PASS, f"{len(cases)} patterns + unknown-negative")
+
+
 def check_downloader_file_safety() -> None:
     """Move/delete must not escape their folder or clobber existing files."""
     try:
@@ -1528,6 +1581,46 @@ def check_ui_regression() -> None:
             except Exception as e:
                 record("ui: mode switch refreshes checkpoint list", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
 
+            # --- attributed errors must highlight the responsible control ----
+            # call_queue renders recognizable errors with data-field carrying the
+            # selector of the control at fault; errorHighlight.js outlines it,
+            # expands collapsed ancestors and scrolls it into view (issue #6).
+            # Inject the div exactly as the backend renders it and assert the
+            # machinery fires on the txt2img ControlNet group.
+            try:
+                page.click('button[role=tab]:text-is("Txt2img")', timeout=15000)
+                page.wait_for_timeout(1000)
+                result = page.evaluate("""() => {
+                    const app = gradioApp();
+                    const host = app.querySelector('#tab_txt2img') || app;
+                    const div = document.createElement('div');
+                    div.className = 'error';
+                    div.setAttribute('data-field', '#{tab}_controlnet');
+                    div.textContent = 'RuntimeError: mat1 and mat2 shapes cannot be multiplied (154x2048 and 768x320)';
+                    host.appendChild(div);
+                    return new Promise(resolve => setTimeout(() => {
+                        const t = app.querySelector('#txt2img_controlnet');
+                        resolve({
+                            exists: !!t,
+                            highlighted: !!(t && t.classList.contains('error-field-highlight')),
+                            handled: div.hasAttribute('data-field-handled'),
+                        });
+                    }, 1500));
+                }""")
+                if not result.get("exists"):
+                    record("ui: attributed error highlights its control", FAIL,
+                           "#txt2img_controlnet not found -- selector in error_tips is stale")
+                elif not result.get("handled"):
+                    record("ui: attributed error highlights its control", FAIL,
+                           "errorHighlight.js never processed the error div (script not loaded?)")
+                elif not result.get("highlighted"):
+                    record("ui: attributed error highlights its control", FAIL,
+                           "the control did not receive the error-field-highlight class")
+                else:
+                    record("ui: attributed error highlights its control", PASS)
+            except Exception as e:
+                record("ui: attributed error highlights its control", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
             # --- no JS errors ------------------------------------------------
             # A broad net for gradio-6 breakage that still renders.
             # Known, pre-existing errors: page-load callbacks that dereference
@@ -1575,6 +1668,7 @@ CHECKS = {
         ("deps", check_dependency_conflicts),
         ("pins", check_pins_hold),
         ("classify", check_downloader_classification),
+        ("error-tips", check_error_tips),
         ("filesafety", check_downloader_file_safety),
         ("dl-e2e", check_download_end_to_end),
         ("json", check_json_and_bom),

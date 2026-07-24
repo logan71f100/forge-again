@@ -85,7 +85,16 @@ def wrap_gradio_call_no_job(func, extra_outputs=None, add_stats=False):
                 extra_outputs_array = [None, '']
 
             error_message = f'{type(e).__name__}: {e}'
-            res = extra_outputs_array + [f"<div class='error'>{html.escape(error_message)}</div>"]
+            # append a plain-language hint for recognizable errors (e.g. an SD 1.5
+            # ControlNet used with an SDXL checkpoint) so users get a fix, not
+            # just a raw exception. When the error is attributable to a specific
+            # control, data-field carries its selector for errorHighlight.js to
+            # outline and scroll into view (issue #6).
+            from modules import error_tips
+            tip, field = error_tips.tip_and_field_for(error_message)
+            tip_html = f"<div class='error-tip'>Tip: {html.escape(tip)}</div>" if tip else ""
+            field_attr = f" data-field=\"{html.escape(field, quote=True)}\"" if field else ""
+            res = extra_outputs_array + [f"<div class='error'{field_attr}>{html.escape(error_message)}{tip_html}</div>"]
 
         devices.torch_gc()
 
