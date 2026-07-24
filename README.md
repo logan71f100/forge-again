@@ -44,9 +44,9 @@ Pick your platform — each guide has its own setup steps, caveats and recommend
 
 | Platform | Guide | AI assistant | Status |
 |---|---|---|---|
-| **Windows** | [docs/install-windows.md](docs/install-windows.md) | prebuilt, works out of the box | ✅ **Verified** — primary dev platform |
-| **Docker** (any host + NVIDIA GPU) | [docs/install-docker.md](docs/install-docker.md) | opt-in, built from source in the image | ✅ **Verified** — build, GPU and generation tested |
-| **Linux** (native) | [docs/install-linux.md](docs/install-linux.md) | opt-in, build from the included patch | ⚠️ **Untested** — shares the Windows code path |
+| **Windows** | [docs/install-windows.md](docs/install-windows.md) | prebuilt, works out of the box | ✅ **Verified** |
+| **Docker** (any host + NVIDIA GPU) | [docs/install-docker.md](docs/install-docker.md) | opt-in, built from source in the image | ✅ **Verified** |
+| **Linux** (native) | [docs/install-linux.md](docs/install-linux.md) | opt-in, build from the included patch | ⚠️ **Untested** |
 | **macOS** | [docs/install-macos.md](docs/install-macos.md) | build from patch; hibernate untested on Metal | ⚠️ **Untested** |
 
 "Verified" means it was actually built and run on that platform, not just expected to work.
