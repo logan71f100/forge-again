@@ -23,6 +23,14 @@ omegaconf==2.2.3
 open-clip-torch==2.20.0
 piexif==1.1.3
 protobuf==3.20.3   # security: clears CVE-2022-1941; capped <4 by open-clip-torch 2.20.0 (CLIP text-encoder dep)
+# onnxruntime is pulled in (unpinned) by the ControlNet/legacy-preprocessor
+# extensions at startup. Its latest (1.27) requires protobuf>=4.25.8, which
+# fought open-clip-torch's protobuf<4 cap -- a tug-of-war on every launch
+# (issue #8). Pin to 1.19.2, the newest release that leaves protobuf unpinned
+# (so protobuf 3.20.3 satisfies it), has cp312 wheels and numpy-2 support. With
+# it already installed, the extensions' unpinned `onnxruntime` is satisfied and
+# never upgrades, so protobuf is no longer disturbed.
+onnxruntime==1.19.2
 psutil>=5.9.5
 pytorch_lightning==1.9.4
 resize-right==0.0.2

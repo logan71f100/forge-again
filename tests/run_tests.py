@@ -52,11 +52,11 @@ VENDORED = ("forge_legacy_preprocessors", "packages_3rdparty", "annotator",
 
 # Dependency conflicts we have consciously accepted. Anything NOT in this list
 # is treated as a regression, which is how the protobuf/open-clip breakage
-# would have been caught.
+# would have been caught. Empty now: the old onnxruntime>=4.25.8 vs
+# open-clip-torch<4 protobuf conflict (issue #8) was resolved by pinning
+# onnxruntime==1.19.2 (leaves protobuf unpinned), so `pip check` is clean and
+# any new onnxruntime/protobuf clash should fail here rather than be tolerated.
 ACCEPTED_CONFLICTS = [
-    # onnxruntime wants protobuf>=4.25.8, but open-clip-torch (SDXL text
-    # encoder) caps it <4. We pin 3.20.3; see requirements_versions.txt.
-    ("onnxruntime", "protobuf"),
 ]
 
 # Files that must never be committed -- personal settings and generated output.
