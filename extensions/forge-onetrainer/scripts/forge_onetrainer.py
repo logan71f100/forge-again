@@ -32,8 +32,13 @@ import gradio as gr
 from modules import script_callbacks, shared, paths, errors
 
 EXT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OT_DIR = os.path.join(EXT_DIR, "OneTrainer")
-WORK_DIR = os.path.join(EXT_DIR, "work")
+# The OneTrainer install (a ~50k-file clone + its own multi-GB venv, with its
+# own nested .git) must live OUTSIDE extensions/: Forge reads git metadata for
+# every extension, and walking that tree hangs the whole Extensions list. Keep
+# it as a top-level sibling instead, which the extension scanner never touches.
+_ROOT = os.path.dirname(os.path.dirname(EXT_DIR))
+OT_DIR = os.path.join(_ROOT, "onetrainer-engine")
+WORK_DIR = os.path.join(_ROOT, "onetrainer-work")
 OT_REPO = "https://github.com/Nerogar/OneTrainer.git"
 
 # model-type + preset per forge mode
@@ -238,6 +243,10 @@ def _build_config(run_dir, mode, name, base_model, images_dir, init_text, token_
         "debug_dir": os.path.join(run_dir, "debug"),
         "workspace_dir": os.path.join(run_dir, "workspace"),
         "cache_dir": os.path.join(run_dir, "cache"),
+        # Embedding training freezes the UNet/VAE/TE and optimises only the
+        # embedding vectors, so precomputing latents is pure win: it frees the
+        # VAE from VRAM during training. Essential to fit SDXL on ~11 GB.
+        "latent_caching": True,
         # The embedding to create: placeholder token + how many vectors + init text.
         # is_output_embedding marks this as the trained result to save (vs an
         # additional read-only input embedding); train=True so it's optimized.

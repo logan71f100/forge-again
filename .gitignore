@@ -52,10 +52,12 @@ notification.mp3
 !/extensions/forge-ai-assistant/
 !/extensions/forge-onetrainer/
 
-# forge-onetrainer clones OneTrainer (its own multi-GB venv) and writes per-run
-# work dirs at runtime -- track the extension's own code, never those.
-/extensions/forge-onetrainer/OneTrainer/
-/extensions/forge-onetrainer/work/
+# forge-onetrainer installs OneTrainer (a ~50k-file clone + its own multi-GB
+# venv) and writes per-run work dirs. These live OUTSIDE extensions/ on purpose
+# -- Forge reads git metadata for every extension, and that tree would hang the
+# Extensions list. Never track them.
+/onetrainer-engine/
+/onetrainer-work/
 
 # assistant runtime state + secrets never enter git (the *.pth rule above keeps
 # segment-anything's SAM/GroundingDINO model weights out too)

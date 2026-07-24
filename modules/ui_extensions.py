@@ -576,7 +576,11 @@ def create_ui():
                     info = gr.HTML(html)
 
                 with gr.Row(elem_classes="progress-container"):
-                    extensions_table = gr.HTML('Loading...', elem_id="extensions_installed_html")
+                    # Populate at build time, not via ui.load: the Extensions tab
+                    # is lazily built (gr.render on first open), so a demo.load
+                    # handler never fires for it -- it would sit on "Loading..."
+                    # forever. Building the table here runs when the tab opens.
+                    extensions_table = gr.HTML(extension_table(), elem_id="extensions_installed_html")
 
                 ui.load(fn=extension_table, inputs=[], outputs=[extensions_table], show_progress=False)
                 refresh.click(fn=extension_table, inputs=[], outputs=[extensions_table], show_progress=False)
@@ -683,7 +687,9 @@ def create_ui():
                     config_save_button = gr.Button(value="Save Current Config")
 
                 config_states_info = gr.HTML("")
-                config_states_table = gr.HTML("Loading...")
+                # Same as above: build at creation so the lazy tab doesn't hang
+                # on "Loading..." (demo.load never fires for it).
+                config_states_table = gr.HTML(update_config_states_table("Current"))
                 ui.load(fn=update_config_states_table, inputs=[config_states_list], outputs=[config_states_table])
 
                 config_save_button.click(fn=save_config_state, inputs=[config_save_name], outputs=[config_states_list, config_states_info])
