@@ -1,3 +1,4 @@
+import contextlib
 import inspect
 import re
 import types
@@ -265,4 +266,40 @@ class Dependency(gr.events.Dependency):
 gr.events.Dependency = Dependency
 
 gr.Box = gr.Group
+
+
+@contextlib.contextmanager
+def force_interactive_components():
+    """Make components built inside a `gr.render` body interactive.
+
+    Gradio treats `interactive=None` as "infer it", and infers by checking
+    whether the component is an input to some event. For a lazily-built tab the
+    body is constructed inside `gr.render` and its events are wired afterwards,
+    so that inference sees no inputs and renders EVERY control disabled --
+    sliders, radios, dropdowns, the lot. The result looks like a normal UI that
+    simply refuses to respond to clicks.
+
+    Not hypothetical: this made the entire img2img tab non-interactive (resize
+    mode, sampling, steps, width/height, batch count...), while txt2img -- built
+    eagerly from the very same helper functions -- was fine.
+
+    An explicit interactive=False is still honoured; only "infer" is overridden.
+    """
+    from gradio.components.base import Component
+
+    original_init = Component.__init__
+
+    def patched_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        try:
+            if getattr(self, "interactive", False) is None:
+                self.interactive = True
+        except Exception:
+            pass
+
+    Component.__init__ = patched_init
+    try:
+        yield
+    finally:
+        Component.__init__ = original_init
 

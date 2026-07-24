@@ -966,7 +966,8 @@ def create_ui():
 
         @gr.render(triggers=[img2img_built_gate.change])
         def _render_img2img_body():
-            _build_img2img_body()
+            with gradio_extensions.force_interactive_components():
+                _build_img2img_body()
 
     img2img_interface.img2img_built_gate = img2img_built_gate
 

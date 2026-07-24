@@ -1131,6 +1131,283 @@ def check_git_bootstrap_works() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_gpu_all_modes() -> None:
+    """Generate in every mode that has a checkpoint, not just the active one.
+
+    A break in sd or flux is invisible while you're working in xl, which is
+    exactly how mode-specific regressions survive. Opt-in: each mode pays its
+    own server start and checkpoint load.
+    """
+    if not os.environ.get("FORGE_TEST_ALL_MODES"):
+        record("gpu: every mode generates", SKIP, "run with --all-modes (a minute per mode)")
+        return
+
+    models = os.environ.get("FORGE_MODELS_DIR", os.path.join(ROOT, "models"))
+    available = []
+    for mode in ("sd", "xl", "flux"):
+        d = os.path.join(models, "checkpoints", mode)
+        if os.path.isdir(d) and any(f.lower().endswith((".safetensors", ".ckpt", ".gguf"))
+                                    for f in os.listdir(d)):
+            available.append(mode)
+    if not available:
+        record("gpu: every mode generates", SKIP, "no checkpoints found in any mode")
+        return
+
+    for mode in available:
+        try:
+            with ServerSession(mode=mode) as s:
+                # Flux is slow and needs no CFG; keep every mode cheap.
+                payload = {"prompt": "a red apple on a wooden table", "steps": 6,
+                           "width": 512, "height": 512, "seed": 7,
+                           "cfg_scale": 1.0 if mode == "flux" else 5.0}
+                r = s.post("/sdapi/v1/txt2img", payload, timeout=1800)
+                imgs = r.get("images") or []
+                if not imgs:
+                    record(f"gpu[{mode}]: generates an image", FAIL, "no image returned")
+                    continue
+                img = _decode(imgs[0])
+                if img.size != (512, 512):
+                    record(f"gpu[{mode}]: generates an image", FAIL,
+                           f"expected 512x512, got {img.size[0]}x{img.size[1]}")
+                elif _looks_blank(img):
+                    record(f"gpu[{mode}]: generates an image", FAIL, "output is blank")
+                else:
+                    record(f"gpu[{mode}]: generates an image", PASS, "512x512, non-blank")
+        except Exception as e:
+            record(f"gpu[{mode}]: generates an image", FAIL,
+                   f"{type(e).__name__}: {str(e)[:200]}")
+
+
+def check_download_end_to_end() -> None:
+    """Actually fetch a file and confirm it lands in the right folder.
+
+    Resolution and classification are unit-tested, but nothing exercised the
+    transfer itself -- filename derivation, the .part rename, destination.
+    Network-dependent, so it's opt-in rather than a flaky gate.
+    """
+    if not os.environ.get("FORGE_TEST_DEEP"):
+        record("downloader: end-to-end fetch", SKIP, "needs network; run with --deep")
+        return
+    try:
+        md = _load_downloader()
+    except Exception as e:
+        record("downloader: end-to-end fetch", FAIL, f"import failed: {e}")
+        return
+
+    tmp = tempfile.mkdtemp(prefix="forge-dl-e2e-")
+    try:
+        cats = {"VAE": os.path.join(tmp, "VAE")}
+        md._category_dirs = lambda: cats
+        md._refresh_lists = lambda *a, **k: None
+        os.makedirs(cats["VAE"], exist_ok=True)
+
+        # Small, public, stable file -- the point is the transfer path, not size.
+        url = ("https://huggingface.co/openai/clip-vit-base-patch32/"
+               "resolve/main/config.json")
+        name, dest, status = md._download_one(url, cats["VAE"], "", lambda *_a: None)
+
+        if not status.startswith("done"):
+            record("downloader: end-to-end fetch", FAIL, f"status was {status!r}")
+        elif not os.path.isfile(dest) or os.path.getsize(dest) == 0:
+            record("downloader: end-to-end fetch", FAIL, "file missing or empty after download")
+        elif os.path.dirname(os.path.abspath(dest)) != os.path.abspath(cats["VAE"]):
+            record("downloader: end-to-end fetch", FAIL, f"landed in the wrong folder: {dest}")
+        elif os.path.exists(dest + ".part"):
+            record("downloader: end-to-end fetch", FAIL, ".part file was left behind")
+        else:
+            # Re-running must skip rather than redownload or duplicate.
+            _n2, _d2, status2 = md._download_one(url, cats["VAE"], "", lambda *_a: None)
+            if not status2.startswith("already"):
+                record("downloader: end-to-end fetch", FAIL,
+                       f"second run should skip an existing file, said {status2!r}")
+            else:
+                record("downloader: end-to-end fetch", PASS,
+                       f"{name} ({_fmt_bytes(os.path.getsize(dest))}), re-run skipped")
+    except Exception as e:
+        record("downloader: end-to-end fetch", FAIL, f"{type(e).__name__}: {str(e)[:200]}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# Tier 5 -- UI regression
+#
+# The bugs that keep recurring in this fork are DOM-level: a control that stops
+# responding after a profile is applied, a tab that won't open, an accordion
+# that unmounts its children. None of that is visible over the API, so this
+# tier drives a real browser.
+#
+# Playwright is an optional, test-only dependency:
+#     venv\Scripts\python -m pip install playwright
+#     venv\Scripts\python -m playwright install chromium
+# --------------------------------------------------------------------------
+
+def check_ui_regression() -> None:
+    """Load the UI in a browser and exercise the controls that break."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        record("ui: loads and controls respond", SKIP,
+               "playwright not installed (pip install playwright && playwright install chromium)")
+        return
+
+    try:
+        session = ServerSession()
+    except Exception as e:
+        record("ui: loads and controls respond", FAIL, f"server did not start: {str(e)[:200]}")
+        return
+
+    with session as s:
+        base = f"http://127.0.0.1:{s.port}/"
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            page = browser.new_page(viewport={"width": 1600, "height": 1000})
+            console_errors: list[str] = []
+            page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
+            page.on("pageerror", lambda e: console_errors.append(f"pageerror: {e}"))
+
+            try:
+                page.goto(base, wait_until="domcontentloaded", timeout=120000)
+                # Gradio hydrates after load; wait for a control to exist.
+                page.wait_for_selector("#txt2img_prompt textarea", timeout=120000)
+                record("ui: page loads and hydrates", PASS)
+            except Exception as e:
+                record("ui: page loads and hydrates", FAIL, f"{type(e).__name__}: {str(e)[:200]}")
+                browser.close()
+                return
+
+            # --- a control must accept input and keep it ---------------------
+            # The recurring failure is a control that looks fine but silently
+            # refuses to change, so this reads the value back.
+            try:
+                page.fill("#txt2img_prompt textarea", "a test prompt from the harness")
+                page.wait_for_timeout(400)
+                got = page.input_value("#txt2img_prompt textarea")
+                if got == "a test prompt from the harness":
+                    record("ui: prompt accepts and keeps input", PASS)
+                else:
+                    record("ui: prompt accepts and keeps input", FAIL, f"read back {got!r}")
+            except Exception as e:
+                record("ui: prompt accepts and keeps input", FAIL, str(e)[:200])
+
+            # --- tabs must open ---------------------------------------------
+            # "the extras tab doesnt open" was a real bug; lazily-built tabs
+            # are a gradio-6 specific hazard in this fork.
+            for tab_id, label in (("#tab_extras", "Extras"), ("#tab_img2img", "Img2img")):
+                try:
+                    # role=tab + exact text: has-text() is a substring match and
+                    # would also hit "Send to img2img" style buttons.
+                    page.click(f'button[role=tab]:text-is("{label}")', timeout=15000)
+                    page.wait_for_selector(f"{tab_id}", state="visible", timeout=30000)
+                    record(f"ui: {label} tab opens", PASS)
+                except Exception as e:
+                    record(f"ui: {label} tab opens", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
+            # --- accordion checkbox must toggle ------------------------------
+            # InputAccordion drives its own checkbox; a desync here is exactly
+            # the "control is stuck" class of bug.
+            try:
+                page.click('button[role=tab]:text-is("Txt2img")', timeout=15000)
+                # InputAccordion exposes its own checkbox as *-visible-checkbox;
+                # it is a sibling of the accordion div, not a child.
+                page.wait_for_selector("#txt2img_hr-visible-checkbox", timeout=30000)
+                cb = page.locator("#txt2img_hr-visible-checkbox").first
+                before = cb.is_checked()
+                cb.click()
+                page.wait_for_timeout(500)
+                after = cb.is_checked()
+                if before != after:
+                    record("ui: hires-fix accordion toggles", PASS, f"{before} -> {after}")
+                    cb.click()          # leave it as we found it
+                else:
+                    record("ui: hires-fix accordion toggles", FAIL,
+                           "checkbox did not change state when clicked (stuck control)")
+            except Exception as e:
+                record("ui: hires-fix accordion toggles", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
+            # --- lazy tabs must not render disabled ---------------------------
+            # gradio infers `interactive` from event wiring, which a gr.render
+            # body doesn't have yet, so a lazily-built tab can come up entirely
+            # non-interactive. That took out all of img2img: the UI looked
+            # normal and simply ignored every click.
+            try:
+                page.click('button[role=tab]:text-is("Img2img")', timeout=15000)
+                page.wait_for_timeout(3500)
+                n_disabled = page.evaluate("""() => {
+                    const root = document.querySelector('#tab_img2img') || document;
+                    return root.querySelectorAll(
+                        'input:disabled, select:disabled, textarea:disabled, label.disabled').length;
+                }""")
+                if n_disabled:
+                    record("ui: lazy tab controls are interactive", FAIL,
+                           f"{n_disabled} disabled control(s) in img2img -- the tab will ignore clicks")
+                else:
+                    record("ui: lazy tab controls are interactive", PASS, "img2img fully interactive")
+            except Exception as e:
+                record("ui: lazy tab controls are interactive", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
+            # --- a radio in a lazy tab must actually toggle -------------------
+            try:
+                before = page.evaluate(
+                    "() => Array.from(document.querySelectorAll('#resize_mode input')).map(i=>i.checked)")
+                page.locator("#resize_mode label").nth(1).click(timeout=10000)
+                page.wait_for_timeout(600)
+                after = page.evaluate(
+                    "() => Array.from(document.querySelectorAll('#resize_mode input')).map(i=>i.checked)")
+                if before != after:
+                    record("ui: resize-mode radio responds", PASS)
+                else:
+                    record("ui: resize-mode radio responds", FAIL, "clicking changed nothing")
+            except Exception as e:
+                record("ui: resize-mode radio responds", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
+            # --- no JS errors ------------------------------------------------
+            # A broad net for gradio-6 breakage that still renders.
+            # Known, pre-existing errors: page-load callbacks that dereference
+            # elements belonging to lazily-built tabs, which do not exist until
+            # that tab is opened. They are harmless (the features work once the
+            # tab is built) but they are real null derefs and should be fixed.
+            # Baselined rather than ignored, so a NEW error still fails here
+            # instead of hiding in the noise.
+            known = (
+                # Page-load / after-update callbacks that dereference elements
+                # belonging to lazily-built tabs, which don't exist until that
+                # tab is opened. Harmless today -- the features work once built
+                # -- but they are real null derefs and worth fixing. Baselined
+                # by signature rather than ignored, so a NEW error still fails.
+                "settings_search",
+                "runCodeForTokenCounters",
+                "showRestoreProgressButton",
+                "setupExtraNetworks",
+                "replacer_generate",
+                "replacer_video_open_folder",
+                "loadPhotopea",                  # ControlNet, fires per UI update
+                "loadOpenposeEditor",            # ControlNet
+                "Cannot read properties of null (reading 'value')",
+            )
+            noise = ("favicon", "ERR_INTERNET_DISCONNECTED", "net::ERR_ABORTED",
+                     "Failed to load resource")
+            real = [e for e in console_errors
+                    if not any(n in e for n in noise) and not any(k in e for k in known)]
+            if real:
+                record("ui: no new JavaScript errors", FAIL,
+                       f"{len(real)} NEW console error(s):\n         "
+                       + "\n         ".join(e[:150] for e in real[:5]))
+            else:
+                baselined = len(console_errors) - len(real)
+                record("ui: no new JavaScript errors", PASS,
+                       f"{baselined} known pre-existing error(s) baselined" if baselined else "")
+
+            browser.close()
+
+
+def _fmt_bytes(n):
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024 or u == "GB":
+            return f"{n:.1f} {u}"
+        n /= 1024
+
+
 CHECKS = {
     "static": [
         ("syntax", check_syntax),
@@ -1138,6 +1415,7 @@ CHECKS = {
         ("pins", check_pins_hold),
         ("classify", check_downloader_classification),
         ("filesafety", check_downloader_file_safety),
+        ("dl-e2e", check_download_end_to_end),
         ("json", check_json_and_bom),
         ("eol", check_line_endings),
         ("privacy", check_no_personal_files_tracked),
@@ -1147,6 +1425,10 @@ CHECKS = {
     ],
     "gpu": [
         ("gpu", check_gpu_generation),
+        ("modes", check_gpu_all_modes),
+    ],
+    "ui": [
+        ("ui", check_ui_regression),
     ],
     "clean": [
         ("guards", check_launcher_guards),
@@ -1163,6 +1445,9 @@ def main() -> int:
     ap.add_argument("--boot", action="store_true", help="tier 2 only")
     ap.add_argument("--gpu", action="store_true", help="tier 3 only (needs a free GPU)")
     ap.add_argument("--clean", action="store_true", help="tier 4 only (fresh-install path)")
+    ap.add_argument("--ui", action="store_true", help="tier 5 only (browser; needs playwright)")
+    ap.add_argument("--all-modes", dest="all_modes", action="store_true",
+                    help="GPU tier: generate in every mode that has a checkpoint")
     ap.add_argument("--deep", action="store_true",
                     help="also run downloads-heavy checks (fetches portable git)")
     ap.add_argument("--quick", action="store_true", help="static + clean, no server start")
@@ -1178,13 +1463,15 @@ def main() -> int:
 
     if args.deep:
         os.environ["FORGE_TEST_DEEP"] = "1"
+    if args.all_modes:
+        os.environ["FORGE_TEST_ALL_MODES"] = "1"
 
     # Default is a full run -- this is a merge gate, so thoroughness beats
     # speed. Use --quick for the checks that need no server and no GPU.
-    selected = [t for t in ("static", "boot", "gpu", "clean") if getattr(args, t)]
+    selected = [t for t in ("static", "boot", "gpu", "clean", "ui") if getattr(args, t)]
     if args.quick:
         selected = ["static", "clean"]
-    tiers = selected or ["static", "clean", "boot", "gpu"]
+    tiers = selected or ["static", "clean", "boot", "ui", "gpu"]
 
     t0 = time.time()
     for tier in tiers:
