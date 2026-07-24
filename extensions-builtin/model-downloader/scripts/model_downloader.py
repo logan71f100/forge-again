@@ -47,12 +47,27 @@ def _category_dirs():
 
 
 def _guess_category(filename):
+    """Best-effort classification from a filename alone.
+
+    Deliberately returns None rather than guessing when the name is genuinely
+    ambiguous -- most SD 1.5 checkpoints are named after their style, with
+    nothing to distinguish them from an SDXL one. Callers fall back to the
+    current mode. Where real metadata exists (Civitai, and Hugging Face repo
+    tags) it is used instead of this, because it is authoritative.
+    """
     n = filename.lower()
-    if "controlnet" in n or n.startswith("control_") or "xinsir" in n:
+
+    # ControlNet first: several are named "...inpaintXL", which the XL rule
+    # below would otherwise claim as a checkpoint.
+    if ("controlnet" in n or n.startswith("control_") or "xinsir" in n
+            or "t2i-adapter" in n or "control-lora" in n
+            or "promax" in n or re.search(r"inpaint[-_]?xl", n)):
         return "ControlNet"
     if "lora" in n or "lycoris" in n or "locon" in n:
         return "LoRA"
-    if "vae" in n or "taesd" in n:
+    # "ae.safetensors" is the Flux VAE and contains no "vae" at all.
+    if ("vae" in n or "taesd" in n
+            or os.path.splitext(n)[0] in ("ae", "ae_f16", "diffusion_pytorch_model_vae")):
         return "VAE"
     if re.match(r"^\d+x[-_.]", n) or "esrgan" in n or "upscal" in n or "ultrasharp" in n:
         return "Upscaler (ESRGAN)"
@@ -62,8 +77,63 @@ def _guess_category(filename):
         return "Embedding"
     if "flux" in n or "fill" in n:
         return "Checkpoint (Flux)"
-    if "xl" in n or "sdxl" in n or "pony" in n or "illustrious" in n:
+    # A plain "xl" substring is deliberate: SDXL checkpoints are named
+    # JuggernautXL, RealVisXL, epicrealismXL, anterosXXXL... Anything that is
+    # actually a ControlNet or LoRA has already been claimed above, which is
+    # what stops "Kataragi_inpaintXL" being mistaken for a checkpoint.
+    if "xl" in n or "pony" in n or "illustrious" in n or "noobai" in n:
         return "Checkpoint (XL)"
+    if "sd15" in n or "sd_15" in n or "v1-5" in n or "sd1.5" in n:
+        return "Checkpoint (SD)"
+    return None
+
+
+def _resolve_huggingface_meta(url, hf_token):
+    """Ask the HF API what a repo actually contains.
+
+    Filenames on Hugging Face say even less than on Civitai -- the repo tags
+    carry the base model, so this is what makes an SD 1.5 checkpoint land in
+    sd/ rather than in whichever mode happens to be active.
+
+    Returns a category or None; never raises.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) < 2:
+            return None
+        repo = f"{parts[0]}/{parts[1]}"
+        headers = {"User-Agent": "forge-again-model-downloader/1.0"}
+        if hf_token:
+            headers["Authorization"] = f"Bearer {hf_token.strip()}"
+        r = requests.get(f"https://huggingface.co/api/models/{repo}", headers=headers, timeout=15)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        tags = [str(t).lower() for t in (data.get("tags") or [])]
+        blob = " ".join(tags)
+        card = data.get("cardData") or {}
+        base = str(card.get("base_model") or "").lower()
+
+        # The repo id matters as much as the tags: a base model carries no
+        # base_model tag (it *is* the base), so stabilityai/stable-diffusion-xl
+        # and lllyasviel/ControlNet-v1-1 are only identifiable by name.
+        both = blob + " " + base + " " + repo.lower()
+
+        if "controlnet" in both:
+            return "ControlNet"
+        if "lora" in tags:
+            return "LoRA"
+        if "textual_inversion" in blob:
+            return "Embedding"
+        if "flux" in both:
+            return "Checkpoint (Flux)"
+        if "stable-diffusion-xl" in both or "sdxl" in both:
+            return "Checkpoint (XL)"
+        if "stable-diffusion-v1-5" in both or "runwayml/stable-diffusion" in both:
+            return "Checkpoint (SD)"
+    except Exception:
+        pass
     return None
 
 
@@ -195,88 +265,285 @@ def _refresh_lists(categories_used):
         errors.report("model-downloader: refreshing model lists failed", exc_info=True)
 
 
-def download(urls_text, category, hf_token):
-    urls = [u for u in (line.strip() for line in (urls_text or "").splitlines()) if u]
-    urls = list(dict.fromkeys(urls))
-    if not urls:
-        yield "<p>Paste at least one link first.</p>"
-        return
-    if not _busy_lock.acquire(blocking=False):
-        yield "<p>A download is already running — wait for it to finish (or cancel it).</p>"
-        return
+# ------------------------------------------------------------------ civitai
+#
+# Civitai page links can't be downloaded directly, and the API knows things a
+# filename never will -- the model type and its base model -- so a checkpoint
+# lands in sd/, xl/ or flux/ correctly instead of being guessed at from a name.
 
-    _cancel.clear()
-    lines = []
-    current = {"text": ""}
+CIVITAI_API = "https://civitai.com/api/v1"
 
-    def render():
-        rows = "".join(f"<div>{line}</div>" for line in lines)
-        live = f"<div>{current['text']}</div>" if current["text"] else ""
-        return f"<div style='font-family:monospace; line-height:1.6'>{rows}{live}</div>"
+_CIVITAI_TYPE_MAP = {
+    "lora": "LoRA",
+    "locon": "LoRA",
+    "lycoris": "LoRA",
+    "doraversion": "LoRA",
+    "textualinversion": "Embedding",
+    "vae": "VAE",
+    "controlnet": "ControlNet",
+    "upscaler": "Upscaler (ESRGAN)",
+}
 
+
+def _civitai_token(explicit=None):
+    if explicit and explicit.strip():
+        return explicit.strip()
     try:
-        dirs = _category_dirs()
+        return open(os.path.join(paths.data_path, ".civitai_token"), encoding="utf-8").read().strip()
+    except OSError:
+        return ""
+
+
+def _civitai_category(model_type, base_model):
+    cat = _CIVITAI_TYPE_MAP.get((model_type or "").strip().lower().replace(" ", ""))
+    if cat:
+        return cat
+    b = (base_model or "").lower()
+    if "flux" in b:
+        return "Checkpoint (Flux)"
+    if any(k in b for k in ("xl", "pony", "illustrious", "noobai")):
+        return "Checkpoint (XL)"
+    if b:
+        return "Checkpoint (SD)"
+    return None
+
+
+def _civitai_get(path, token):
+    headers = {"User-Agent": "forge-again-model-downloader/1.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    r = requests.get(f"{CIVITAI_API}/{path}", headers=headers, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+def _civitai_pick_file(version):
+    files = version.get("files") or []
+    if not files:
+        raise ValueError("this Civitai version has no downloadable files")
+    # Prefer the primary weights; some versions also ship configs/previews.
+    for f in files:
+        if f.get("primary"):
+            return f
+    for f in files:
+        if (f.get("type") or "").lower() == "model":
+            return f
+    return files[0]
+
+
+def _resolve_civitai(url, token):
+    """Turn any civitai.com link into (download_url, filename, category).
+
+    Raises on anything it can't resolve, so the queue shows a real reason
+    instead of silently downloading an HTML error page.
+    """
+    parsed = urllib.parse.urlparse(url)
+    q = dict(urllib.parse.parse_qsl(parsed.query))
+    version_id = q.get("modelVersionId")
+
+    m = re.search(r"/api/download/models/(\d+)", parsed.path)
+    if m:
+        version_id = version_id or m.group(1)
+    model_id = None
+    m = re.search(r"/models/(\d+)", parsed.path)
+    if m and "/api/download/" not in parsed.path:
+        model_id = m.group(1)
+
+    if version_id:
+        version = _civitai_get(f"model-versions/{version_id}", token)
+        model_type = ((version.get("model") or {}).get("type"))
+    elif model_id:
+        model = _civitai_get(f"models/{model_id}", token)
+        versions = model.get("modelVersions") or []
+        if not versions:
+            raise ValueError("this Civitai model has no versions")
+        version = versions[0]                       # newest first
+        model_type = model.get("type")
+        if not version.get("files"):
+            version = _civitai_get(f"model-versions/{version['id']}", token)
+    else:
+        raise ValueError("could not find a model or version id in that Civitai link")
+
+    f = _civitai_pick_file(version)
+    dl = f.get("downloadUrl") or version.get("downloadUrl")
+    if not dl:
+        raise ValueError("Civitai did not return a download URL (model may require sign-in)")
+    name = f.get("name") or ""
+    cat = _civitai_category(model_type, version.get("baseModel"))
+    return dl, name, cat
+
+
+# -------------------------------------------------------------------- queue
+#
+# A single background worker drains a shared queue, so links can be added at
+# any time -- including while a download is running.
+
+_queue = []
+_qlock = threading.RLock()
+_worker_thread = None
+_cancel_current = threading.Event()
+_next_id = [0]
+
+
+def _queue_add(url, name, category, note=""):
+    with _qlock:
+        _next_id[0] += 1
+        item = {
+            "id": _next_id[0], "url": url, "name": name or url,
+            "category": category, "status": "queued", "detail": note,
+            "dest": "",
+        }
+        _queue.append(item)
+        return item
+
+
+def _worker_loop():
+    while True:
+        with _qlock:
+            item = next((i for i in _queue if i["status"] == "queued"), None)
+            if item is None:
+                return                              # drained; thread exits
+            item["status"] = "downloading"
+            item["detail"] = "starting"
+        _cancel_current.clear()
         used = set()
-        for i, raw in enumerate(urls, start=1):
-            try:
-                url = _normalize_url(raw)
-                display = html.escape(urllib.parse.unquote(urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]) or url)
-                cat = category
-                if cat == "Auto-detect":
-                    cat = _guess_category(display) or _current_mode_checkpoint_category()
-                dest_dir = dirs[cat]
-                current["text"] = f"⬇ [{i}/{len(urls)}] {display} → {html.escape(cat)} … starting"
-                yield render()
+        try:
+            dirs = _category_dirs()
+            dest_dir = dirs[item["category"]]
 
-                def log_progress(msg, display=display, i=i):
-                    current["text"] = f"⬇ [{i}/{len(urls)}] {display} … {html.escape(msg)}"
+            def log_progress(msg, it=item):
+                it["detail"] = msg
 
-                last_yield = time.time()
-                gen_done = {}
-
-                def worker():
-                    try:
-                        gen_done["result"] = _download_one(url, dest_dir, hf_token, log_progress)
-                    except Exception as e:
-                        gen_done["error"] = e
-
-                t = threading.Thread(target=worker, daemon=True)
-                t.start()
-                while t.is_alive():
-                    t.join(timeout=0.5)
-                    if time.time() - last_yield >= 1.0:
-                        last_yield = time.time()
-                        yield render()
-
-                if "error" in gen_done:
-                    raise gen_done["error"]
-                name, dest, status = gen_done["result"]
-                ok = status.startswith("done") or status.startswith("already")
-                icon = "✅" if status.startswith("done") else ("⏭" if status.startswith("already") else "⚠")
-                lines.append(f"{icon} {html.escape(name)} → {html.escape(dest)} — {html.escape(status)}")
+            name, dest, status = _download_one(item["url"], dest_dir, item.get("token", ""), log_progress)
+            with _qlock:
+                item["name"] = name
+                item["dest"] = dest
+                item["detail"] = status
                 if status.startswith("done"):
-                    used.add(cat)
-                if _cancel.is_set():
-                    lines.append("🛑 cancelled — remaining links were not downloaded")
-                    current["text"] = ""
-                    yield render()
-                    return
-            except Exception as e:
-                lines.append(f"❌ {html.escape(raw[:120])} — {html.escape(str(e))}")
-            current["text"] = ""
-            yield render()
-
+                    item["status"] = "done"
+                    used.add(item["category"])
+                elif status.startswith("already"):
+                    item["status"] = "skipped"
+                elif status.startswith("cancelled"):
+                    item["status"] = "cancelled"
+                else:
+                    item["status"] = "failed"
+        except Exception as e:
+            with _qlock:
+                item["status"] = "failed"
+                item["detail"] = str(e)[:300]
         if used:
             _refresh_lists(used)
-            lines.append("🔄 model lists refreshed — new files show up in the dropdowns (hit the refresh icon if one doesn't)")
-        yield render()
-    finally:
-        _busy_lock.release()
+
+
+def _ensure_worker():
+    global _worker_thread
+    with _qlock:
+        if _worker_thread is None or not _worker_thread.is_alive():
+            _worker_thread = threading.Thread(target=_worker_loop, daemon=True)
+            _worker_thread.start()
+
+
+_ICON = {"queued": "🕘", "downloading": "⬇", "done": "✅", "skipped": "⏭",
+         "failed": "❌", "cancelled": "🛑"}
+
+
+def _render_queue():
+    with _qlock:
+        items = list(_queue)
+    if not items:
+        return "<p>Queue is empty. Paste links and press <b>Add to queue</b>.</p>"
+    pending = sum(1 for i in items if i["status"] in ("queued", "downloading"))
+    rows = []
+    for i in items:
+        icon = _ICON.get(i["status"], "•")
+        detail = html.escape(i["detail"] or "")
+        cat = html.escape(i["category"])
+        nm = html.escape(str(i["name"])[:90])
+        colour = {"failed": "#e06c75", "done": "#98c379", "downloading": "#61afef"}.get(i["status"], "#9aa5b1")
+        rows.append(
+            f"<div style='padding:2px 0'><span style='color:{colour}'>{icon}</span> "
+            f"<b>{nm}</b> <span style='opacity:.7'>→ {cat}</span>"
+            + (f" <span style='opacity:.8'>— {detail}</span>" if detail else "") + "</div>"
+        )
+    head = f"<div style='opacity:.7;margin-bottom:4px'>{len(items)} item(s), {pending} pending</div>"
+    return f"<div style='font-family:monospace;line-height:1.5'>{head}{''.join(rows)}</div>"
+
+
+def add_to_queue(urls_text, category, hf_token, civitai_token):
+    """Resolve links and append them. Never blocks on the download itself."""
+    raw_urls = [u for u in (line.strip() for line in (urls_text or "").splitlines()) if u]
+    raw_urls = list(dict.fromkeys(raw_urls))
+    if not raw_urls:
+        return _render_queue(), gr.update()
+
+    ctoken = _civitai_token(civitai_token)
+    for raw in raw_urls:
+        try:
+            url = _normalize_url(raw)
+            parsed = urllib.parse.urlparse(url)
+            name, cat = "", None
+
+            if parsed.netloc.endswith("civitai.com"):
+                url, name, cat = _resolve_civitai(url, ctoken)
+                if ctoken and "token=" not in url:
+                    sep = "&" if "?" in url else "?"
+                    url = f"{url}{sep}token={urllib.parse.quote(ctoken)}"
+            else:
+                name = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1])
+
+            if category != "Auto-detect":
+                cat = category
+            if not cat:
+                # Filename first (it's free and often decisive), then repo
+                # metadata, and only then the current mode as a last resort.
+                cat = _guess_category(name)
+                if not cat and parsed.netloc.endswith("huggingface.co"):
+                    cat = _resolve_huggingface_meta(url, hf_token)
+                cat = cat or _current_mode_checkpoint_category()
+
+            item = _queue_add(url, name, cat, "waiting")
+            item["token"] = hf_token or ""
+        except Exception as e:
+            it = _queue_add(raw, raw[:90], _current_mode_checkpoint_category(), str(e)[:200])
+            it["status"] = "failed"
+
+    _ensure_worker()
+    return _render_queue(), ""          # clear the input box
+
+
+def queue_stream():
+    """Stream queue state while anything is pending, then settle."""
+    yield _render_queue()
+    idle_rounds = 0
+    while idle_rounds < 2:
+        time.sleep(1.0)
+        with _qlock:
+            busy = any(i["status"] in ("queued", "downloading") for i in _queue)
+        idle_rounds = 0 if busy else idle_rounds + 1
+        yield _render_queue()
 
 
 def cancel_download():
+    """Cancel the item being downloaded; the rest of the queue continues."""
     _cancel.set()
-    return gr.update()
+    _cancel_current.set()
+    time.sleep(0.2)
+    _cancel.clear()
+    return _render_queue()
+
+
+def clear_finished():
+    with _qlock:
+        _queue[:] = [i for i in _queue if i["status"] in ("queued", "downloading")]
+    return _render_queue()
+
+
+def clear_queue():
+    """Drop everything not already in flight."""
+    with _qlock:
+        _queue[:] = [i for i in _queue if i["status"] == "downloading"]
+    return _render_queue()
 
 
 # ------------------------------------------------- top models per mode
@@ -390,16 +657,18 @@ def _add_top_url(index):
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as tab:
         gr.Markdown(
-            "Paste one or more **Hugging Face** file links (the page URL of a `.safetensors` file works — "
-            "it is converted to a direct download automatically). Direct links from other sites work too. "
-            "Files are placed into the right models folder for you."
+            "Paste **Hugging Face** or **Civitai** links, one per line. A Civitai model page URL works "
+            "(`civitai.com/models/12345`, with or without `?modelVersionId=`) — the API is asked for the "
+            "actual file, and the model type and base model decide the folder, so a checkpoint lands in "
+            "`sd/`, `xl/` or `flux/` correctly. Hugging Face `/blob/` page links become direct downloads. "
+            "Links can be added **at any time**, including while something is downloading."
         )
         with gr.Row():
             with gr.Column(scale=3):
                 urls = gr.Textbox(
                     label="Model links (one per line)",
                     lines=4,
-                    placeholder="https://huggingface.co/owner/repo/blob/main/model.safetensors",
+                    placeholder="https://civitai.com/models/12345\nhttps://huggingface.co/owner/repo/blob/main/model.safetensors",
                     elem_id="model_downloader_urls",
                 )
             with gr.Column(scale=1):
@@ -410,14 +679,21 @@ def on_ui_tabs():
                     elem_id="model_downloader_category",
                 )
                 hf_token = gr.Textbox(
-                    label="Hugging Face token (only for gated models)",
+                    label="Hugging Face token (gated models)",
                     type="password",
                     elem_id="model_downloader_token",
                 )
+                civitai_token = gr.Textbox(
+                    label="Civitai token (some models require one)",
+                    type="password",
+                    elem_id="model_downloader_civitai_token",
+                )
         with gr.Row():
-            start = gr.Button("Download", variant="primary", elem_id="model_downloader_start")
-            stop = gr.Button("Cancel", elem_id="model_downloader_cancel")
-        status = gr.HTML(elem_id="model_downloader_status")
+            start = gr.Button("Add to queue", variant="primary", elem_id="model_downloader_start")
+            stop = gr.Button("Cancel current", elem_id="model_downloader_cancel")
+            clear_done = gr.Button("Clear finished", elem_id="model_downloader_clear_done")
+            refresh_q = gr.Button("🔄 Refresh", elem_id="model_downloader_refresh_queue")
+        status = gr.HTML(value=_render_queue(), elem_id="model_downloader_status")
 
         top_title = gr.Markdown("**Top checkpoints on Hugging Face** — press refresh to load", elem_id="model_downloader_top_title")
         top_urls_state = gr.State([])
@@ -430,8 +706,18 @@ def on_ui_tabs():
                     top_buttons.append(gr.Button("Add to list", visible=False, elem_id=f"model_downloader_top_add_{i}"))
         refresh_top = gr.Button("🔄 Refresh top models", elem_id="model_downloader_refresh_top")
 
-        start.click(fn=download, inputs=[urls, category, hf_token], outputs=[status], show_progress="hidden")
+        # Adding returns immediately (the worker runs in the background), then a
+        # second event streams queue state until it settles -- so the box is
+        # free for more links while downloads continue.
+        start.click(
+            fn=add_to_queue,
+            inputs=[urls, category, hf_token, civitai_token],
+            outputs=[status, urls],
+            show_progress="hidden",
+        ).then(fn=queue_stream, outputs=[status], show_progress="hidden")
         stop.click(fn=cancel_download, outputs=[status], show_progress="hidden")
+        clear_done.click(fn=clear_finished, outputs=[status], show_progress="hidden")
+        refresh_q.click(fn=queue_stream, outputs=[status], show_progress="hidden")
         refresh_top.click(
             fn=refresh_top_models,
             outputs=[top_title, *top_rows, top_urls_state, *top_buttons],
