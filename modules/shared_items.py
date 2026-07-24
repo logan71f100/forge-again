@@ -19,7 +19,13 @@ def dat_models_names():
 def postprocessing_scripts():
     import modules.scripts
 
-    return modules.scripts.scripts_postproc.scripts
+    # The postprocessing scripts register when the (lazily-built) Extras tab is
+    # created, so this is None if the Settings tab is opened first. Several
+    # Settings options build their dropdown choices from this list; returning
+    # None made the whole Settings tab crash to "common.error". Fall back to an
+    # empty list -- the choices repopulate once Extras has been built.
+    sp = getattr(modules.scripts, "scripts_postproc", None)
+    return getattr(sp, "scripts", None) or []
 
 
 def sd_vae_items():
