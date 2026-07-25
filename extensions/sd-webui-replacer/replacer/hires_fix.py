@@ -15,7 +15,7 @@ def prepareGenerationArgsBeforeHiresFixPass(gArgs: GenerationArgs) -> None:
 
 def getGenerationArgsForHiresFixPass(gArgs: GenerationArgs) -> GenerationArgs:
     hf = gArgs.hires_fix_args
-    if hf.positive_prompt_suffix == "":
+    if not hf.positive_prompt_suffix:   # None (gradio-6 empty textbox) or ""
         hf.positive_prompt_suffix = getHiresFixPositivePromptSuffixExamples()[0]
     hrGArgs = copy.copy(gArgs)
     hrGArgs.upscalerForImg2Img = hf.above_limit_upscaler
@@ -36,11 +36,15 @@ def getGenerationArgsForHiresFixPass(gArgs: GenerationArgs) -> GenerationArgs:
     if hf.soft_inpaint != 'Same' and hrGArgs.soft_inpaint_args is not None and len(hrGArgs.soft_inpaint_args) != 0:
         hrGArgs.soft_inpaint_args = list(hrGArgs.soft_inpaint_args)
         hrGArgs.soft_inpaint_args[0] = hf.soft_inpaint == 'Enable'
-    if hf.positive_prompt != "":
+    # gradio 6 delivers None (not "") for untouched textboxes, so every prompt
+    # string here may be None -- coerce before concatenating (None + str raised
+    # "unsupported operand type(s) for +" when the main prompt was left empty).
+    if hf.positive_prompt:
         hrGArgs.positivePrompt = hf.positive_prompt
-    hrGArgs.positivePrompt = hrGArgs.positivePrompt + " " + hf.positive_prompt_suffix
-    if hf.negative_prompt != "":
+    hrGArgs.positivePrompt = (hrGArgs.positivePrompt or "") + " " + (hf.positive_prompt_suffix or "")
+    if hf.negative_prompt:
         hrGArgs.negativePrompt = hf.negative_prompt
+    hrGArgs.negativePrompt = hrGArgs.negativePrompt or ""
     if hf.sd_model_checkpoint is not None and hf.sd_model_checkpoint != 'Use same model'\
             and hf.sd_model_checkpoint != 'Use same checkpoint' and hf.sd_model_checkpoint != "":
         hrGArgs.sd_model_checkpoint = hf.sd_model_checkpoint

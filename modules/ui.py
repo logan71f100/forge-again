@@ -954,13 +954,16 @@ def create_ui():
         except Exception as _e:
             print("[lazy-img2img] extra-networks pre-populate skipped:", _e)
 
-        # LAZY IMG2IMG: keep the instruct-pix2pix Image CFG Scale slider hidden (moved here from
-        # create_ui's main body, where it used to reference this now-lazily-built slider). settings
-        # and demo are in create_ui's scope; this runs after page load so demo.load won't re-fire,
-        # but image_cfg_scale is already created visible=False so the initial state is correct.
-        update_image_cfg_scale_visibility = lambda: gr.update(visible=False)
-        settings.text_settings.change(fn=update_image_cfg_scale_visibility, inputs=[], outputs=[image_cfg_scale])
-        demo.load(fn=update_image_cfg_scale_visibility, inputs=[], outputs=[image_cfg_scale])
+        # LAZY IMG2IMG: the instruct-pix2pix Image CFG Scale slider is created
+        # visible=False and this port never shows it, so no visibility-refresh
+        # wiring is needed. The old demo.load/text_settings.change deps here were
+        # actively harmful: created inside THIS session's gr.render but triggered
+        # by APP-LEVEL components, they fired in every LATER session too, tried to
+        # update this session's (foreign) slider id, and crashed that session's
+        # frontend update pipeline (KeyError server-side, "reading 'props'"
+        # client-side) -- which then broke dependency registration for the later
+        # session's own renders (e.g. its Send-to paste bindings). Never wire an
+        # app-level trigger to render-created outputs.
 
         # Restore the eager post-img2img state (matches the scripts.scripts_current = None below).
         scripts.scripts_current = None

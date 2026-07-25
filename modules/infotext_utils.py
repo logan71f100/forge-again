@@ -48,10 +48,16 @@ class PasteField(tuple):
 
 paste_fields: dict[str, dict] = {}
 registered_param_bindings: list[ParamBinding] = []
-# id() of every ParamBinding already wired by connect_paste_params_buttons(), so the function is
-# idempotent: with lazily-built tabs it gets called on every tab build (to pick up cross-links
-# whose other end just appeared) and must never wire the same binding twice.
-_connected_bindings: set[int] = set()
+# id(binding) -> id() of the destination's paste-fields list it was wired against.
+# connect_paste_params_buttons() runs on every tab build and must not wire the
+# same binding twice -- but "once" has to be per DESTINATION INSTANCE, not
+# per-process. paste_fields is global while each browser session renders its own
+# component instances, so with a plain once-guard a second session's "Send to
+# img2img" got wired against the FIRST session's components (destination
+# "existed") and then permanently skipped when its own img2img built -- the
+# button silently delivered params into a dead session. Keying on the fields
+# instance re-wires a binding whenever the destination has been (re)built.
+_connected_bindings: dict[int, int] = {}
 
 
 def reset():
@@ -115,6 +121,16 @@ def image_from_url_text(filedata):
     return None
 
 
+def _current_session_hash():
+    """Session hash of the browser session whose gr.render body is currently
+    executing, or None during the eager page-load build (no event context)."""
+    try:
+        from gradio.context import LocalContext
+        return getattr(LocalContext.request.get(None), 'session_hash', None)
+    except Exception:
+        return None
+
+
 def add_paste_fields(tabname, init_img, fields, override_settings_component=None):
 
     if fields:
@@ -122,7 +138,8 @@ def add_paste_fields(tabname, init_img, fields, override_settings_component=None
             if not isinstance(fields[i], PasteField):
                 fields[i] = PasteField(*fields[i])
 
-    paste_fields[tabname] = {"init_img": init_img, "fields": fields, "override_settings_component": override_settings_component}
+    paste_fields[tabname] = {"init_img": init_img, "fields": fields, "override_settings_component": override_settings_component,
+                             "_session": _current_session_hash()}
 
     # backwards compatibility for existing extensions
     import modules.ui
@@ -149,6 +166,10 @@ def bind_buttons(buttons, send_image, send_generate_info):
 
 
 def register_paste_params_button(binding: ParamBinding):
+    # remember which browser session created this button: buttons built inside a
+    # lazy gr.render exist only in that session, so only that session's later
+    # renders may wire them (see connect_paste_params_buttons).
+    binding._session = _current_session_hash()
     registered_param_bindings.append(binding)
 
 
@@ -172,6 +193,7 @@ def connect_paste_params_buttons(only_tabname=None, bindings=None):
     only_tabname: restrict to bindings whose DESTINATION is this tab.
     bindings: consider only these specific ParamBinding objects instead of the full registry."""
     candidate_bindings = registered_param_bindings if bindings is None else bindings
+    _cur_session = _current_session_hash()
     for binding in candidate_bindings:
         if only_tabname is not None and binding.tabname != only_tabname:
             continue
@@ -179,10 +201,33 @@ def connect_paste_params_buttons(only_tabname=None, bindings=None):
         if binding.tabname not in paste_fields:
             continue
 
-        if id(binding) in _connected_bindings:
+        # SESSION SCOPING: components created inside a gr.render exist only in
+        # the session that rendered them. Never wire a button from one session
+        # to destination fields from another -- that produced dead bindings
+        # (a second user's "Send to img2img" delivered params into the first
+        # user's session). A None session means "page-load build", shared by all.
+        _entry = paste_fields[binding.tabname]
+        _fields_session = _entry.get("_session")
+        if _fields_session is not None and _fields_session != _cur_session:
+            continue    # destination belongs to another session; ours isn't built yet
+        _binding_session = getattr(binding, "_session", None)
+        if _binding_session is not None and _binding_session != _cur_session:
+            continue    # source button belongs to another session; its own render wires it
+
+        _fields_token = id(_entry["fields"])
+        if _connected_bindings.get(id(binding)) == _fields_token:
             continue
 
-        _connected_bindings.add(id(binding))
+        _connected_bindings[id(binding)] = _fields_token
+        try:
+            _dbg_btn = getattr(binding.paste_button, '_id', '?')
+            _dbg_src_img = getattr(binding.source_image_component, '_id', None)
+            _dbg_src_txt = getattr(binding.source_text_component, '_id', None)
+            _dbg_init = getattr(paste_fields[binding.tabname]['init_img'], '_id', None)
+            _dbg_f0 = getattr(paste_fields[binding.tabname]['fields'][0][0], '_id', None) if paste_fields[binding.tabname]['fields'] else None
+            print(f"[paste-wire DEBUG] dest={binding.tabname} cur={_cur_session} btn={_dbg_btn} src_img={_dbg_src_img} src_txt={_dbg_src_txt} dst_init={_dbg_init} dst_f0={_dbg_f0}", flush=True)
+        except Exception as _e:
+            print(f"[paste-wire DEBUG] dest={binding.tabname} (id dump failed: {_e})", flush=True)
 
         destination_image_component = paste_fields[binding.tabname]["init_img"]
         fields = paste_fields[binding.tabname]["fields"]
