@@ -1710,6 +1710,42 @@ def check_ui_regression() -> None:
             except Exception as e:
                 record("ui: get_tab_index returns the real sub-tab", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
 
+            # extra-networks search/sort/refresh must be visible + wired. The
+            # controls bar lived under div.tab-nav (gradio 4); gradio 6 renders
+            # div.tab-wrapper, so setup bailed and the bar stayed display:none --
+            # no search, no refresh. Also, pages mount lazily per sub-tab AFTER
+            # setup first ran, so the wiring must be per-page idempotent. Open the
+            # Lora pane and assert the search box is visible and filters cards.
+            try:
+                page.click('button[role=tab]:text-is("Txt2img")', timeout=15000)
+                page.wait_for_timeout(1500)
+                page.evaluate("() => { const b = gradioApp && gradioApp().querySelector('#txt2img_extra_networks_button, button[id*=\"txt2img_extra_networks\"]'); if (b) b.click(); }")
+                page.wait_for_timeout(1500)
+                page.evaluate("() => { const b = document.getElementById('txt2img_lora-button'); if (b) b.click(); }")
+                page.wait_for_timeout(2500)
+                svis = page.evaluate("() => { const e = document.getElementById('txt2img_lora_extra_search'); return e ? e.offsetParent !== null : null; }")
+                rvis = page.evaluate("() => { const e = document.getElementById('txt2img_lora_extra_refresh'); return e ? e.offsetParent !== null : null; }")
+                filtered = None
+                if svis:
+                    total = page.evaluate("() => document.querySelectorAll('#txt2img_extra_tabs div.card').length")
+                    page.fill("#txt2img_lora_extra_search", "zzz_nomatch_qwerty"); page.wait_for_timeout(700)
+                    shown = page.evaluate("() => [...document.querySelectorAll('#txt2img_extra_tabs div.card')].filter(c => c.style.display !== 'none' && c.offsetParent !== null).length")
+                    page.fill("#txt2img_lora_extra_search", ""); page.wait_for_timeout(400)
+                    filtered = (total, shown)
+                if not svis:
+                    record("ui: extra-networks search is visible + filters", FAIL,
+                           "the Lora search box is hidden -- controls bar not built (tab-nav vs tab-wrapper)")
+                elif not rvis:
+                    record("ui: extra-networks search is visible + filters", FAIL, "search visible but refresh button hidden")
+                elif filtered and filtered[0] > 0 and filtered[1] == filtered[0]:
+                    record("ui: extra-networks search is visible + filters", FAIL,
+                           f"typing a no-match term hid 0 of {filtered[0]} cards -- filter not wired")
+                else:
+                    record("ui: extra-networks search is visible + filters", PASS,
+                           f"search+refresh visible; filter {filtered[0] if filtered else '?'}->{filtered[1] if filtered else '?'} on no-match")
+            except Exception as e:
+                record("ui: extra-networks search is visible + filters", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
             browser.close()
 
 

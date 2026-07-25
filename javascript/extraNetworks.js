@@ -15,6 +15,16 @@ function toggleCss(key, css, enable) {
     }
 }
 
+// The extra-networks tab-bar container. gradio 4 rendered it as `div.tab-nav`;
+// gradio 6 renders it as `div.tab-wrapper`. The old code only looked for
+// `.tab-nav`, found nothing, and bailed -- so the search/sort/refresh controls
+// div was never built and those controls stayed permanently hidden. Accept both.
+function extraNetworksTabNav(tabname) {
+    var et = gradioApp().querySelector('#' + tabname + '_extra_tabs');
+    if (!et) return null;
+    return et.querySelector(':scope > div.tab-wrapper') || et.querySelector(':scope > div.tab-nav');
+}
+
 function setupExtraNetworksForTab(tabname) {
     function registerPrompt(tabname, id) {
         var textarea = gradioApp().querySelector("#" + id + " > label > textarea");
@@ -29,28 +39,38 @@ function setupExtraNetworksForTab(tabname) {
         });
     }
 
-    var tabnav = gradioApp().querySelector('#' + tabname + '_extra_tabs > div.tab-nav');
+    var tabnav = extraNetworksTabNav(tabname);
     // img2img is a lazily-built tab, so its extra-networks nav does not exist
     // when this first runs at load. Bail quietly instead of throwing on
-    // tabnav.appendChild(null); setupExtraNetworks() retries once it mounts.
+    // tabnav.appendChild(null); the onAfterUiUpdate retry re-runs once it mounts.
     if (!tabnav) return;
-    // Idempotent: a retry must not add a second controls div.
-    if (tabnav.querySelector(':scope > .extra-networks-controls-div')) return;
-    var controlsDiv = document.createElement('DIV');
-    controlsDiv.classList.add('extra-networks-controls-div');
-    tabnav.appendChild(controlsDiv);
-    tabnav.insertBefore(controlsDiv, null);
+    // Reuse the controls div if it already exists -- do NOT bail the whole
+    // function. The individual extra-network PAGES (Lora, Checkpoints, ...) mount
+    // lazily when their sub-tab is first opened, i.e. AFTER this first ran and
+    // built the (empty) controls div. Bailing here left every page that mounted
+    // later unwired, so its search/sort/refresh stayed hidden. Instead the
+    // per-page loop below skips pages already wired, so repeated calls wire each
+    // page exactly once, whenever it appears.
+    var controlsDiv = tabnav.querySelector(':scope > .extra-networks-controls-div');
+    if (!controlsDiv) {
+        controlsDiv = document.createElement('DIV');
+        controlsDiv.classList.add('extra-networks-controls-div');
+        tabnav.appendChild(controlsDiv);
+    }
 
     var this_tab = gradioApp().querySelector('#' + tabname + '_extra_tabs');
     this_tab.querySelectorAll(":scope > [id^='" + tabname + "_']").forEach(function(elem) {
         // tabname_full = {tabname}_{extra_networks_tabname}
         var tabname_full = elem.id;
+        // already wired this page on an earlier pass -- don't double-wire.
+        if (extraNetworksApplyFilter[tabname_full]) return;
         var search = gradioApp().querySelector("#" + tabname_full + "_extra_search");
         var sort_dir = gradioApp().querySelector("#" + tabname_full + "_extra_sort_dir");
         var refresh = gradioApp().querySelector("#" + tabname_full + "_extra_refresh");
         var currentSort = '';
 
-        // If any of the buttons above don't exist, we want to skip this iteration of the loop.
+        // If any of the buttons above don't exist, this page hasn't mounted yet;
+        // skip it -- a later pass wires it once its sub-tab is opened.
         if (!search || !sort_dir || !refresh) {
             return; // `return` is equivalent of `continue` but for forEach loops.
         }
@@ -239,18 +259,21 @@ function setupExtraNetworks() {
     setupExtraNetworksForTab('txt2img');
     setupExtraNetworksForTab('img2img');
 
-    // img2img builds lazily, so its extra-networks nav usually isn't present on
-    // the first pass above (which is why that used to throw). Watch for it and
-    // wire it once it appears; setupExtraNetworksForTab is idempotent, so a
-    // spurious fire is harmless. The observer disconnects once img2img is done.
-    if (!gradioApp().querySelector('#img2img_extra_tabs > div.tab-nav')) {
+    // Both navs can be absent on this first pass -- img2img because it builds
+    // lazily, and txt2img because its nav can mount a beat after onUiLoaded.
+    // Whichever isn't ready bailed above (no controls div built), so watch and
+    // retry each until its controls div exists. setupExtraNetworksForTab is
+    // idempotent, so re-runs are harmless.
+    var pending = ['txt2img', 'img2img'].filter(function(t) {
+        return !gradioApp().querySelector('#' + t + '_extra_tabs .extra-networks-controls-div');
+    });
+    if (pending.length) {
         var obs = new MutationObserver(function() {
-            if (gradioApp().querySelector('#img2img_extra_tabs > div.tab-nav')) {
-                setupExtraNetworksForTab('img2img');
-                if (gradioApp().querySelector('#img2img_extra_tabs .extra-networks-controls-div')) {
-                    obs.disconnect();
-                }
-            }
+            pending = pending.filter(function(t) {
+                if (extraNetworksTabNav(t)) setupExtraNetworksForTab(t);
+                return !gradioApp().querySelector('#' + t + '_extra_tabs .extra-networks-controls-div');
+            });
+            if (!pending.length) obs.disconnect();
         });
         obs.observe(gradioApp(), {childList: true, subtree: true});
     }
@@ -772,7 +795,9 @@ function scheduleAfterScriptsCallbacks() {
 onUiLoaded(function() {
     var mutationObserver = new MutationObserver(function(m) {
         let existingSearchfields = gradioApp().querySelectorAll("[id$='_extra_search']").length;
-        let neededSearchfields = gradioApp().querySelectorAll("[id$='_extra_tabs'] > .tab-nav > button").length - 2;
+        // gradio 6 nests the tab buttons under `.tab-wrapper` (was `.tab-nav > button`).
+        let neededSearchfields = gradioApp().querySelectorAll(
+            "[id$='_extra_tabs'] > .tab-wrapper button[role='tab'], [id$='_extra_tabs'] > .tab-nav > button").length - 2;
 
         if (!executedAfterScripts && existingSearchfields >= neededSearchfields) {
             mutationObserver.disconnect();
@@ -784,3 +809,14 @@ onUiLoaded(function() {
 });
 
 uiAfterScriptsCallbacks.push(setupExtraNetworks);
+
+// The extra-networks navs mount at different, hard-to-pin times: img2img builds
+// lazily, and txt2img's drawer only fully mounts when first opened -- so the
+// one-shot setup above (and its observer) can miss txt2img entirely, leaving its
+// search/sort/refresh permanently hidden. Retry on every UI update: setupExtra-
+// NetworksForTab bails immediately when the nav is absent or the controls div is
+// already built, so this is cheap once wired.
+onAfterUiUpdate(function() {
+    setupExtraNetworksForTab('txt2img');
+    setupExtraNetworksForTab('img2img');
+});
