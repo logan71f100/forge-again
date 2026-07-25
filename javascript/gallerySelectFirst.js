@@ -24,7 +24,12 @@
             // ignore live-preview frames (data:/blob: URIs) — wait for real files
             var files = imgs.map(function(im) { return im.src; }).filter(function(s) { return s.indexOf('file=') !== -1; });
             if (!files.length) { continue; }
-            var key = files.slice().sort().join('|');
+            // DEDUPE before keying: the gallery's imgs include the LARGE PREVIEW
+            // as well as the thumbnails, and clicking a different thumbnail
+            // changes the preview's src -- with a plain multiset key that looked
+            // like "new items" and snapped the selection back to the first image
+            // on every click. The unique set only changes on a real new result.
+            var key = [...new Set(files)].sort().join('|');
             if (lastKey[id] === undefined) { lastKey[id] = key; continue; }   // adopt initial state silently
             if (key === lastKey[id]) continue;
             lastKey[id] = key;
