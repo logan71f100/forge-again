@@ -117,6 +117,15 @@ def get_total_memory(dev=None, torch_total_too=False):
             mem_reserved = stats['reserved_bytes.all.current']
             mem_total_torch = mem_reserved
             mem_total = torch.xpu.get_device_properties(dev).total_memory
+        elif is_rocm():
+            try:
+                # ROCm PyTorch exposes hipMemoryGetInfo via the CUDA API shim
+                _, mem_total_rocm = torch.cuda.mem_get_info(dev)
+                mem_total_torch = mem_total_rocm
+                mem_total = mem_total_rocm
+            except Exception:
+                mem_total = 0
+                mem_total_torch = 0
         else:
             stats = torch.cuda.memory_stats(dev)
             mem_reserved = stats['reserved_bytes.all.current']
@@ -182,6 +191,14 @@ def is_nvidia():
     return False
 
 
+def is_rocm():
+    global cpu_state
+    if cpu_state == CPUState.GPU:
+        if torch.version.hip:
+            return True
+    return False
+
+
 ENABLE_PYTORCH_ATTENTION = False
 if args.attention_pytorch:
     ENABLE_PYTORCH_ATTENTION = True
@@ -199,6 +216,10 @@ try:
                 VAE_DTYPES = [torch.bfloat16] + VAE_DTYPES
     if is_intel_xpu():
         if args.attention_split == False and args.attention_quad == False:
+            ENABLE_PYTORCH_ATTENTION = True
+    if is_rocm():
+        if args.attention_split == False and args.attention_quad == False:
+            # torch.nn.functional.scaled_dot_product_attention works on ROCm
             ENABLE_PYTORCH_ATTENTION = True
 except:
     pass
@@ -269,6 +290,11 @@ def get_torch_device_name(device):
             return "{}".format(device.type)
     elif is_intel_xpu():
         return "{} {}".format(device, torch.xpu.get_device_name(device))
+    elif is_rocm():
+        try:
+            return "{} {}: ROCm".format(device, torch.cuda.get_device_name(device))
+        except:
+            return "{}: ROCm".format(device)
     else:
         return "CUDA {}: {}".format(device, torch.cuda.get_device_name(device))
 
@@ -1197,6 +1223,14 @@ def soft_empty_cache(force=False):
         torch.mps.empty_cache()
     elif is_intel_xpu():
         torch.xpu.empty_cache()
+    elif is_rocm():
+        # ROCm: do NOT call empty_cache/ipc_collect without force.
+        # It causes issues on many AMD GPUs.
+        if force:
+            try:
+                torch.cuda.empty_cache()
+            except:
+                pass
     elif torch.cuda.is_available():
         if force or is_nvidia():  # This seems to make things worse on ROCm so I only do it for cuda
             torch.cuda.empty_cache()

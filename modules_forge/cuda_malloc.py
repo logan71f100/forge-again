@@ -60,6 +60,11 @@ def cuda_malloc_supported():
 
 
 def try_cuda_malloc():
+    # ROCm: skip cudaMallocAsync - ROCm uses hipMallocAsync handled by the runtime.
+    if hasattr(torch.version, 'hip') and torch.version.hip:
+        print('[cuda_malloc] SKIPPED: ROCm detected, using hip malloc.')
+        return
+
     do_cuda_malloc = False
 
     try:
