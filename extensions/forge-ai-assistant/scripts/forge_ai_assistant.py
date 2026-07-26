@@ -23,6 +23,7 @@ import time
 import base64
 import shlex
 import ctypes
+import signal
 import threading
 import subprocess
 from ctypes import wintypes
@@ -367,18 +368,59 @@ def _proc_alive():
     return p is not None and p.poll() is None
 
 
+def _kill_process(port):
+    """Kill whatever process is listening on a given port (cross-platform)."""
+    try:
+        if os.name == "nt":
+            out = subprocess.check_output(
+                ["netstat", "-ano", "-p", "tcp"], text=True, creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and "LISTENING" in line and parts[1].endswith(f":{port}"):
+                    subprocess.call(["taskkill", "/PID", parts[-1], "/T", "/F"], creationflags=subprocess.CREATE_NO_WINDOW)
+                    return True
+        else:
+            out = subprocess.check_output(["fuser", f"{port}/tcp"], text=True, stderr=subprocess.DEVNULL)
+            for pid_str in out.strip().split():
+                try:
+                    pid = int(pid_str.split(":")[0] if ":" in pid_str else pid_str)
+                    os.kill(pid, signal.SIGTERM)
+                except: pass
+        return False
+    except: pass
+    return None
+
+
+def _kill_process_or_pid(pid):
+    """Kill a process by PID (cross-platform)."""
+    try:
+        if os.name == "nt":
+            subprocess.call(["taskkill", "/PID", str(pid), "/T", "/F"], creationflags=subprocess.CREATE_NO_WINDOW)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except Exception as e:
+        print(f"[forge-ai] kill process {pid} failed: {e}")
+
+
 def _pid_on_port(port):
     """Find the PID listening on a TCP port (covers a text-gen we didn't spawn)."""
     try:
-        out = subprocess.check_output(
-            ["netstat", "-ano", "-p", "tcp"], text=True, creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 5 and "LISTENING" in line and parts[1].endswith(f":{port}"):
-                return int(parts[-1])
-    except Exception:
-        pass
+        if os.name == "nt":
+            out = subprocess.check_output(
+                ["netstat", "-ano", "-p", "tcp"], text=True, creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and "LISTENING" in line and parts[1].endswith(f":{port}"):
+                    return int(parts[-1])
+        else:
+            out = subprocess.check_output(["fuser", f"{port}/tcp"], text=True, stderr=subprocess.DEVNULL)
+            for pid_str in out.strip().split():
+                try:
+                    return int(pid_str.split(":")[0] if ":" in pid_str else pid_str)
+                except: pass
+    except: pass
     return None
 
 
@@ -424,6 +466,15 @@ def _llm_env():
             env["PATH"] = torch_lib + os.pathsep + env.get("PATH", "")
     except Exception:
         pass
+    env["LD_LIBRARY_PATH"] = os.pathsep.join([
+        os.path.join(_PROJECT_ROOT, "forge-llm", "vulkan"),
+        os.path.join(_PROJECT_ROOT, "forge-llm", "rocm"),
+        os.path.join(_PROJECT_ROOT, "forge-llm", "cuda"),
+        os.path.join(_PROJECT_ROOT, "forge-llm"),
+        env.get("PATH", ""),
+    ]) + os.pathsep + env.get("PATH", "")
+    if os.name != "nt":
+        env["LLAMA_VK_EXCLUSIVE_FILL"] = "1"
     return env
 
 
@@ -531,55 +582,57 @@ def _start_log_tail():
 
 _job = {"handle": None}
 
+if os.name == "nt":
+    def _make_kill_on_close_job():
+        k32 = ctypes.windll.kernel32
 
-def _make_kill_on_close_job():
-    k32 = ctypes.windll.kernel32
+        class _BASIC(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                        ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD),
+                        ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t),
+                        ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t),
+                        ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
 
-    class _BASIC(ctypes.Structure):
-        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
-                    ("PerJobUserTimeLimit", ctypes.c_int64),
-                    ("LimitFlags", wintypes.DWORD),
-                    ("MinimumWorkingSetSize", ctypes.c_size_t),
-                    ("MaximumWorkingSetSize", ctypes.c_size_t),
-                    ("ActiveProcessLimit", wintypes.DWORD),
-                    ("Affinity", ctypes.c_size_t),
-                    ("PriorityClass", wintypes.DWORD),
-                    ("SchedulingClass", wintypes.DWORD)]
+        class _IO(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in
+                        ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                         "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
 
-    class _IO(ctypes.Structure):
-        _fields_ = [(n, ctypes.c_uint64) for n in
-                    ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-                     "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+        class _EXTENDED(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", _BASIC),
+                        ("IoInfo", _IO),
+                        ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
 
-    class _EXTENDED(ctypes.Structure):
-        _fields_ = [("BasicLimitInformation", _BASIC),
-                    ("IoInfo", _IO),
-                    ("ProcessMemoryLimit", ctypes.c_size_t),
-                    ("JobMemoryLimit", ctypes.c_size_t),
-                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        info = _EXTENDED()
+        info.BasicLimitInformation.LimitFlags = 0x2000   # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            k32.CloseHandle(job)
+            return None
+        return job
 
-    job = k32.CreateJobObjectW(None, None)
-    if not job:
-        return None
-    info = _EXTENDED()
-    info.BasicLimitInformation.LimitFlags = 0x2000   # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
-        k32.CloseHandle(job)
-        return None
-    return job
-
-
-def _assign_to_job(popen):
-    try:
-        if _job["handle"] is None:
-            _job["handle"] = _make_kill_on_close_job()
-        if _job["handle"]:
-            ctypes.windll.kernel32.AssignProcessToJobObject(_job["handle"], int(popen._handle))
-            return True
-    except Exception as e:
-        print(f"[forge-ai] job-object attach failed ({e}) — server will not auto-die with Forge")
-    return False
+    def _assign_to_job(popen):
+        try:
+            if _job["handle"] is None:
+                _job["handle"] = _make_kill_on_close_job()
+            if _job["handle"]:
+                ctypes.windll.kernel32.AssignProcessToJobObject(_job["handle"], int(popen._handle))
+                return True
+        except Exception as e:
+            print(f"[forge-ai] job-object attach failed ({e}) — server will not auto-die with Forge")
+        return False
+else:
+    def _make_kill_on_close_job(): pass
+    def _assign_to_job(popen): pass  # no-op on Linux (process groups handle this)
 
 
 def _sanitize_extra_args(raw):
@@ -649,7 +702,7 @@ def _start_textgen_locked(model=None):
     zombie = _pid_on_port(_api_port())
     if zombie:
         print(f"[forge-ai] killing unresponsive process on port {_api_port()} (pid {zombie})")
-        subprocess.call(["taskkill", "/PID", str(zombie), "/T", "/F"], creationflags=subprocess.CREATE_NO_WINDOW)
+        _kill_process_or_pid(zombie)
         _wait_textgen_gone(8.0)
 
     if bool(_opt("forge_ai_auto_unload", True)):
@@ -680,10 +733,15 @@ def _start_textgen_locked(model=None):
     log_path = os.path.join(os.path.dirname(exe), "server.log")
     _start_log_tail()
     with open(log_path, "ab") as log_f:
-        _proc["popen"] = subprocess.Popen(
-            args, cwd=os.path.dirname(exe), stdout=log_f, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW, env=_llm_env()
+        popen_kwargs = dict(
+            args=args, cwd=os.path.dirname(exe), stdout=log_f, stderr=subprocess.STDOUT,
+            env=_llm_env(),
         )
+        if os.name != "nt":
+            popen_kwargs["start_new_session"] = True
+        else:
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        _proc["popen"] = subprocess.Popen(**popen_kwargs)
     _assign_to_job(_proc["popen"])   # dies with Forge, no matter how Forge exits
     _auto["stopped_for_gen"] = False
     print(f"[forge-ai] launched llama-server (pid {_proc['popen'].pid}): {' '.join(args[1:])}")
@@ -773,18 +831,14 @@ def _stop_textgen(mode="soft"):
     killed = []
     if _proc_alive():
         pid = _proc["popen"].pid
-        subprocess.call(
-            ["taskkill", "/PID", str(pid), "/T", "/F"], creationflags=subprocess.CREATE_NO_WINDOW
-        )
+        _kill_process_or_pid(pid)
         killed.append(pid)
         _proc["popen"] = None
     else:
         # maybe the user started the server themselves — find it by port
         pid = _pid_on_port(_api_port())
         if pid:
-            subprocess.call(
-                ["taskkill", "/PID", str(pid), "/T", "/F"], creationflags=subprocess.CREATE_NO_WINDOW
-            )
+            _kill_process_or_pid(pid)
             killed.append(pid)
     return {"ok": True, "killed": killed}
 
@@ -988,7 +1042,7 @@ def _auto_start_worker():
         pid = _pid_on_port(_api_port())
         if pid:
             print(f"[forge-ai] replacing leftover llama-server (pid {pid}) with one tied to this Forge")
-            subprocess.call(["taskkill", "/PID", str(pid), "/T", "/F"], creationflags=subprocess.CREATE_NO_WINDOW)
+            _kill_process_or_pid(pid)
             _wait_textgen_gone(8.0)
         result = _start_textgen(None)
         print(f"[forge-ai] auto-start with Forge: {result}")

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# forge-again launcher (Linux x86_64, AMD ROCm / NVIDIA CUDA / Apple MPS)
-# Auto-detects GPU type, installs matching PyTorch, sets platform-specific
-# env vars.
+# forge-again launcher (Linux x86_64, AMD Vulkan / ROCm / NVIDIA CUDA / Apple MPS)
+# Auto-detects GPU type, installs matching PyTorch, builds/deployes llama.cpp
+# binaries for the detected backend.
 #
 # Usage:  ./start.sh [sd|xl|flux]
-# Env:    FORCE_GPU=nvidia|rocm|cpu|mps   override auto-detection
+# Env:    FORCE_GPU=nvidia|rocm|vulkan|cpu|mps   override auto-detection
 # =============================================================================
 set -e
 cd "$(dirname "$(readlink -f "$0")")"
@@ -55,7 +55,22 @@ detect_gpu() {
     return
   fi
 
-  # 4. macOS → MPS (Metal)
+  # 4. Vulkan (AMD iGPU/dGPU via ggml-vulkan backend)
+  if ldconfig -p 2>/dev/null | grep -q libvulkan_radeon; then
+    if [ -d /home/logan/llama.cpp ] || [ -d ./llama.cpp ]; then
+      echo "[bootstrap] Detected AMD Vulkan (libvulkan_radeon) for ggml-vulkan backend"
+      GPU=vulkan
+      return
+    fi
+  fi
+  # fallback: any AMD vulkan driver
+  if ldconfig -p 2>/dev/null | grep -qE 'libvulkan_(rade|amd)'; then
+    echo "[bootstrap] Detected AMD Vulkan GPU (no llama.cpp found, will build)"
+    GPU=vulkan
+    return
+  fi
+
+  # 5. macOS → MPS (Metal)
   if [ "$(uname)" = "Darwin" ]; then
     echo "[bootstrap] macOS → MPS"
     GPU=mps
@@ -63,7 +78,7 @@ detect_gpu() {
   fi
 
   echo "[bootstrap] No GPU detected; falling back to CPU." >&2
-  echo "[bootstrap] Set FORCE_GPU=nvidia or FORCE_GPU=rocm to override." >&2
+  echo "[bootstrap] Set FORCE_GPU=nvidia|rocm|vulkan|cpu|mps to override." >&2
   GPU=cpu
 }
 
@@ -117,6 +132,93 @@ if [ "$GPU" = "rocm" ]; then
   export OMP_NUM_THREADS="${OMP_NUM_THREADS:-12}"
 fi
 
+# ------------------------------------------------------------------- Vulkan env vars (set when GPU=vulkan — ggml-vulkan backend)
+if [ "$GPU" = "vulkan" ]; then
+  # Vulkan shader cache directory
+  export VULKAN_SHADER_CACHE_DIR="${VULKAN_SHADER_CACHE_DIR:-$FORGE_MODELS_DIR/shader-cache}"
+  mkdir -p "$VULKAN_SHADER_CACHE_DIR" 2>/dev/null || true
+
+  # GGML Vulkan memory mode — balanced for iGPU
+  export GGML_VK_MEMORY_MODEL="${GGML_VK_MEMORY_MODEL:-host}"
+
+  # Limit Vulkan device memory — leave room for Forge (diffusion) models
+  export GGML_VK_MEMORY_RATIO="${GGML_VK_MEMORY_RATIO:-0.75}"
+
+  # Disable validation layers in production
+  export VK_LAYER_PATH=""
+fi
+
+# ------------------------------------------------------------------- build & deploy llama.cpp binaries
+LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-/home/logan/llama.cpp}"
+LLAMA_CPP_BUILD="${LLAMA_CPP_BUILD:-/tmp/forge-llama-build}"
+LLAMA_CPP_DEPLOY="${LLAMA_CPP_DEPLOY:-forge-llm}"
+
+build_llama() {
+  local backend="$1"    # vulkan | rocm | cuda
+  local cmake_cfg=""
+  local build_dir="$LLAMA_CPP_BUILD/$backend"
+  local deploy_dir="$LLAMA_CPP_DEPLOY/$backend"
+
+  mkdir -p "$build_dir" "$deploy_dir"
+
+  case "$backend" in
+    vulkan) cmake_cfg="-DGGML_VULKAN=ON" ;;
+    rocm)   cmake_cfg="-DGGML_HIP=ON" ;;
+    cuda)   cmake_cfg="-DGGML_CUDA=ON" ;;
+  esac
+
+  # skip if deployed binaries already exist (fast re-launch)
+  if [ -f "$deploy_dir/llama-server" ] && [ -f "$deploy_dir/libggml-$backend.so" ]; then
+    echo "[bootstrap] $backend: llama.cpp binaries already deployed"
+    return 0
+  fi
+
+  if [ ! -d "$LLAMA_CPP_SRC" ]; then
+    echo "[bootstrap] WARNING: $backend llama.cpp source not found at $LLAMA_CPP_SRC — LLM AI assistant will be unavailable" >&2
+    return 1
+  fi
+
+  echo "[bootstrap] building llama.cpp for $backend backend ..."
+  cmake -B "$build_dir" -DCMAKE_BUILD_TYPE=Release $cmake_cfg "$LLAMA_CPP_SRC" || fail
+  cmake --build "$build_dir" --target llama-server --target all -j "$(nproc 2>/dev/null || echo 4)" || fail
+
+  echo "[bootstrap] deploying llama.cpp $backend binaries → $deploy_dir"
+  cp "$build_dir/examples/llama-server" "$deploy_dir/" 2>/dev/null || true
+  cp "$build_dir/bin/libggml-$backend.so" "$deploy_dir/" 2>/dev/null || true
+  cp "$build_dir/bin/libggml-base.so" "$deploy_dir/" 2>/dev/null || true
+  cp "$build_dir/bin/libggml-cpu.so" "$deploy_dir/" 2>/dev/null || true
+  cp "$build_dir/bin/libllama.so" "$deploy_dir/" 2>/dev/null || true
+  cp "$build_dir/bin/libllama-common.so" "$deploy_dir/" 2>/dev/null || true
+  cp "$build_dir/bin/libllama-server-impl.so" "$deploy_dir/" 2>/dev/null || true
+  # Make binaries executable
+  chmod +x "$deploy_dir/llama-server" 2>/dev/null || true
+  # Update symlinks so ldconfig can find the .so files at runtime
+  if [ -f "$deploy_dir/libggml-base.so" ]; then
+    ( cd "$deploy_dir" && ln -sf libggml-base.so libggml-base.so.0 2>/dev/null || true )
+  fi
+  if [ -f "$deploy_dir/libggml-$backend.so" ]; then
+    ( cd "$deploy_dir" && ln -sf "libggml-$backend.so" "libggml-$backend.so.0" 2>/dev/null || true )
+  fi
+  if [ -f "$deploy_dir/libllama.so" ]; then
+    ( cd "$deploy_dir" && ln -sf libllama.so libllama.so.0 2>/dev/null || true )
+  fi
+  if [ -f "$deploy_dir/libllama-common.so" ]; then
+    ( cd "$deploy_dir" && ln -sf libllama-common.so libllama-common.so.0 2>/dev/null || true )
+  fi
+  if [ -f "$deploy_dir/libllama-server-impl.so" ]; then
+    ( cd "$deploy_dir" && ln -sf libllama-server-impl.so libllama-server-impl.so.0 2>/dev/null || true )
+  fi
+  echo "[bootstrap] $backend: llama.cpp binaries deployed successfully"
+  return 0
+}
+
+# Build & deploy for all GPU backends that matter
+case "$GPU" in
+  vulkan) build_llama vulkan ;;
+  rocm)   build_llama rocm ; build_llama vulkan ;;  # vulkan is fallback
+  cpu)    build_llama cuda ;;  # fallback to cuda for AI assistant
+esac
+
 # ------------------------------------------------------------------- bootstrap (portable python, venv)
 # launch.py needs `git` to clone assets / huggingface_guess / BLIP. Fail
 # before a half-formed traceback if git is missing.
@@ -168,6 +270,10 @@ if [ ! -f venv/.deps_installed ] || [ -z "$REQHASH" ] || ! grep -qx "$REQHASH" v
         torch==2.13.0+cu126 \
         torchvision==0.28.0+cu126 || fail
       ;;
+    vulkan)
+      # Vulkan uses ggml-vulkan backend (no PyTorch CUDA); use CPU/MPS torch
+      venv/bin/python -m pip install torch torchvision || fail
+      ;;
     mps|cpu)
       venv/bin/python -m pip install torch torchvision || fail
       ;;
@@ -192,10 +298,11 @@ AUTOLAUNCH="--autolaunch"
 # honest about what it does.  --skip-torch-cuda-test is needed when the
 # torch wheel is not cuda-enabled (ROCm nightly, PyPI cpu/mps).
 case "$GPU" in
-  nvidia) LAUNCH_FLAGS="--cuda-malloc" --skip-torch-cuda-test=false ;;
-  rocm)   LAUNCH_FLAGS=""         --skip-torch-cuda-test ;;
-  mps)    LAUNCH_FLAGS=""         --skip-torch-cuda-test ;;
-  cpu)    LAUNCH_FLAGS=""         --skip-torch-cuda-test ;;
+  nvidia) LAUNCH_FLAGS="--cuda-malloc" ; _skip_cuda_test=false ;;
+  rocm)   LAUNCH_FLAGS=""             ; _skip_cuda_test=true  ;;
+  vulkan) LAUNCH_FLAGS=""             ; _skip_cuda_test=true  ;;
+  mps)    LAUNCH_FLAGS=""             ; _skip_cuda_test=true  ;;
+  cpu)    LAUNCH_FLAGS=""             ; _skip_cuda_test=true  ;;
 esac
 
 # ------------------------------------------------------------------- run / restart loop
@@ -204,10 +311,10 @@ while :; do
   venv/bin/python launch.py \
     --listen --port 7860 \
     --api \
-    --cuda-malloc \
+    ${LAUNCH_FLAGS:---cuda-malloc} \
     --no-half-vae --disable-xformers \
     --skip-python-version-check \
-    --skip-torch-cuda-test \
+    --skip-torch-cuda-test="${_skip_cuda_test:-true}" \
     --ckpt-dir    "${FORGE_MODELS_DIR:-./models}/checkpoints/$CKMODE" \
     --lora-dir    "${FORGE_MODELS_DIR:-./models}/Lora" \
     --vae-dir     "${FORGE_MODELS_DIR:-./models}/VAE" \
