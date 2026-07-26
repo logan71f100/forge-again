@@ -4,7 +4,9 @@
 # `torch`/`torchvision` pins and pip doesn't pull CUDA wheels.
 # =============================================================================
 
---extra-index-url https://download.pytorch.org/whl/rocm6.1
+--extra-index-url https://download.pytorch.org/whl/rocm7.1
 
-torch==2.13.0+rocm6.1
-torchvision==0.18.0+rocm6.1
+# ROCm PyTorch for AMD GPUs  
+# Note: if installation fails with disk quota error, ensure enough space (~6GB)
+torch==2.13.0+rocm7.1
+torchvision==0.18.0+rocm7.1
