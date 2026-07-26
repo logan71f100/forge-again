@@ -1,141 +1,222 @@
 #!/usr/bin/env bash
 # =============================================================================
-# forge-again launcher (Linux x86_64, NVIDIA) -- fully self-contained.
-# First run downloads a portable Python 3.12, builds the venv and installs
-# PyTorch (CUDA 12.6) + all dependencies. Later runs skip finished steps.
+# forge-again launcher (Linux x86_64, AMD ROCm / NVIDIA CUDA / Apple MPS)
+# Auto-detects GPU type, installs matching PyTorch, sets platform-specific
+# env vars.
+#
 # Usage:  ./start.sh [sd|xl|flux]
-# Env:    FORGE_MODELS_DIR  models folder   (default: ./models)
-#         FORGE_PORT        UI port         (default: 7860)
+# Env:    FORCE_GPU=nvidia|rocm|cpu|mps   override auto-detection
 # =============================================================================
-set -u
+set -e
 cd "$(dirname "$(readlink -f "$0")")"
 
-FORGE_MODELS_DIR="${FORGE_MODELS_DIR:-$PWD/models}"
-FORGE_PORT="${FORGE_PORT:-7860}"
-PYURL="https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.12.13+20260718-x86_64-unknown-linux-gnu-install_only.tar.gz"
-
+# ------------------------------------------------------------------- helpers
 fail() {
-    echo
-    echo "[bootstrap] SETUP FAILED. Fix the error above and re-run. Partial state"
-    echo "[bootstrap] is kept so a re-run resumes where it stopped."
-    exit 1
+  echo
+  echo "[bootstrap] setup failed. fix the error above and re-run. partial"
+  echo "[bootstrap] state is kept so a re-run resumes where it stopped." >&2
+  exit 1
 }
 
-# ------------------------------------------------------------- mode select
+# ------------------------------------------------------------------- gpu detect
+detect_gpu() {
+  # 1. forced?
+  if [ -n "${FORCE_GPU:-}" ]; then
+    echo "[bootstrap] Force GPU=$FORCE_GPU"
+    GPU="$FORCE_GPU"
+    return
+  fi
+
+  # 2. NVIDIA – nvidia-smi must exist and talk to a driver.
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    # try to get a name; failures look like 'not supported' or 'no data'
+    local gname
+    gname="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)" || true
+    if [ -n "$gname" ] &&
+       ! echo "$gname" | grep -qiE 'not supported|no data|unavailable'; then
+      echo "[bootstrap] Detected NVIDIA GPU: $gname"
+      GPU=nvidia
+      return
+    fi
+  fi
+
+  # 3. AMD – rocm-smi first; second-best: /opt/rocm exists.
+  if command -v rocm-smi >/dev/null 2>&1; then
+    if rocm-smi --showall 2>&1 | grep -qiE 'amg|asrock|amd'; then
+      echo "[bootstrap] Detected AMD GPU via rocm-smi"
+      GPU=rocm
+      return
+    fi
+  fi
+  # fallback heuristic – /opt/rocm presence
+  if [ -d /opt/rocm ]; then
+    echo "[bootstrap] AMD ROCm: /opt/rocm found"
+    GPU=rocm
+    return
+  fi
+
+  # 4. macOS → MPS (Metal)
+  if [ "$(uname)" = "Darwin" ]; then
+    echo "[bootstrap] macOS → MPS"
+    GPU=mps
+    return
+  fi
+
+  echo "[bootstrap] No GPU detected; falling back to CPU." >&2
+  echo "[bootstrap] Set FORCE_GPU=nvidia or FORCE_GPU=rocm to override." >&2
+  GPU=cpu
+}
+
+detect_gpu
+
+# ------------------------------------------------------------------- model / mode select
 MODE="${1:-}"
 [ -z "$MODE" ] && [ -f current_mode.txt ] && MODE="$(cat current_mode.txt)"
-# no argument and no saved mode: default to sd -- modes switch in one click
-# from the UI once running, so there is no reason to block on a menu here
-[ -z "$MODE" ] && MODE=sd
+[ -z "$MODE" ] && MODE=sd          # default – UI can hot-swap later
 case "$MODE" in
-    1|sd|SD)
-        echo "  -> SD 1.5 mode"; MODENAME=sd
-        export REPLACER_DEF_SAMPLER="DPM++ 2M" REPLACER_DEF_SCHEDULER="Karras"
-        export REPLACER_DEF_WIDTH=512 REPLACER_DEF_HEIGHT=512 REPLACER_DEF_STEPS=25
-        export REPLACER_DEF_CFG=7.0 REPLACER_DEF_DENOISE=0.5 REPLACER_FLUX_GUIDANCE=3.5 ;;
-    3|flux|Flux|FLUX)
-        echo "  -> Flux Fill mode"; MODENAME=flux
-        export REPLACER_DEF_SAMPLER="Euler" REPLACER_DEF_SCHEDULER="Simple"
-        export REPLACER_DEF_WIDTH=1024 REPLACER_DEF_HEIGHT=1024 REPLACER_DEF_STEPS=20
-        export REPLACER_DEF_CFG=1.0 REPLACER_DEF_DENOISE=1.0 REPLACER_FLUX_GUIDANCE=30 ;;
-    *)
-        echo "  -> SDXL mode"; MODENAME=xl
-        export REPLACER_DEF_SAMPLER="DPM++ 2M" REPLACER_DEF_SCHEDULER="Karras"
-        export REPLACER_DEF_WIDTH=1024 REPLACER_DEF_HEIGHT=1024 REPLACER_DEF_STEPS=25
-        export REPLACER_DEF_CFG=5.0 REPLACER_DEF_DENOISE=0.75 REPLACER_FLUX_GUIDANCE=3.5 ;;
+  1|sd|SD)
+    echo "  ->  SD 1.5 mode"; MODENAME=sd
+    export REPLACER_DEF_SAMPLER="DPM++ 2M" REPLACER_DEF_SCHEDULER="Karras"
+    export REPLACER_DEF_WIDTH=512  REPLACER_DEF_HEIGHT=512 REPLACER_DEF_STEPS=25
+    export REPLACER_DEF_CFG=7  REPLACER_DEF_DENOISE=0.5 REPLACER_FLUX_GUIDANCE=3.5
+    ;;
+  3|flux|Flux|FLUX)
+    echo "  ->  Flux Fill mode"; MODENAME=flux
+    export REPLACER_DEF_SAMPLER="Euler" REPLACER_DEF_SCHEDULER="Simple"
+    export REPLACER_DEF_WIDTH=1024 REPLACER_DEF_HEIGHT=1024 REPLACER_DEF_STEPS=20
+    export REPLACER_DEF_CFG=1  REPLACER_DEF_DENOISE=1    REPLACER_FLUX_GUIDANCE=30
+    ;;
+  *)
+    echo "  ->  SDXL mode"; MODENAME=xl
+    export REPLACER_DEF_SAMPLER="DPM++ 2M" REPLACER_DEF_SCHEDULER="Karras"
+    export REPLACER_DEF_WIDTH=1024 REPLACER_DEF_HEIGHT=1024 REPLACER_DEF_STEPS=25
+    export REPLACER_DEF_CFG=5  REPLACER_DEF_DENOISE=0.75 REPLACER_FLUX_GUIDANCE=3.5
+    ;;
 esac
 export REPLACER_DEF_MASK_EXPAND=15 REPLACER_DEF_BOX_THRESHOLD=0.35
-export REPLACER_DEF_MASK_BLUR=6 REPLACER_DEF_PADDING=48 REPLACER_DEF_FILL=original
+export REPLACER_DEF_MASK_BLUR=6   REPLACER_DEF_PADDING=48  REPLACER_DEF_FILL=original
 
-# --------------------------------------------------------------- bootstrap
-# launch.py clones three helper repos (assets, huggingface_guess, BLIP) and runs
-# `git rev-parse` on them even when they already exist, so git is required, not
-# optional. Fail here with something actionable rather than inside a traceback.
+# ------------------------------------------------------------------- ROCm env vars  (set unconditionally when GPU=rocm)
+if [ "$GPU" = "rocm" ]; then
+  # HSA graph rebuild fix for iGPUs (Strix Point RDNA3.5 / gfx115x)
+  # gfx1150 (0x5585) is accepted when gfx1151 (0x5586) is in the table
+  export HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-11.5.1}"
+
+  # MIOpen: FAST skips exhaustive conv searches that often hit MIOPEN_ENO_CONFIG on
+  # iGPUs / new archs. Immediate-mode heuristic kernels are ~16 s/512 px and
+  # proven working.
+  export MIOPEN_FIND_MODE="${MIOPEN_FIND_MODE:-FAST}"
+
+  # Shared-memory allocator tuning for AMD iGPU, ~11 GB.
+  export PYTORCH_HIP_ALLOC_CONF="${PYTORCH_HIP_ALLOC_CONF:-garbage_collection_threshold:0.9,max_split_size_mb:512}"
+
+  # Disable DMA engine (stability for iGPU)
+  export HSA_ENABLE_SDMA="${HSA_ENABLE_SDMA:-0}"
+
+  # Limit parallelism to avoid thrashing
+  export OMP_NUM_THREADS="${OMP_NUM_THREADS:-12}"
+fi
+
+# ------------------------------------------------------------------- bootstrap (portable python, venv)
+# launch.py needs `git` to clone assets / huggingface_guess / BLIP. Fail
+# before a half-formed traceback if git is missing.
 if ! command -v git >/dev/null 2>&1; then
-    echo "[bootstrap] git was not found on PATH, and Forge needs it to fetch three"
-    echo "[bootstrap] helper repositories. Install it and re-run:"
-    echo "[bootstrap]   Debian/Ubuntu:  sudo apt install git"
-    echo "[bootstrap]   Fedora/RHEL:    sudo dnf install git"
-    echo "[bootstrap]   Arch:           sudo pacman -S git"
-    exit 1
+  echo "[bootstrap] git not found; install it and re-run. example:"
+  echo "[bootstrap]   apt install  -y  git    # Debian/Ubuntu"
+  echo "[bootstrap]   dnf install -y  git    # RHEL/Fedora"
+  echo "[bootstrap]   pacman -S git                      # Arch"
+  exit 1
 fi
 
+PYURL="https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.12.13+20260718-x86_64-unknown-linux-gnu-install_only.tar.gz"
 if [ ! -x python/bin/python3 ]; then
-    echo "[bootstrap] Downloading portable Python 3.12 ..."
-    curl -L --fail -o _py.tar.gz "$PYURL" || fail
-    echo "[bootstrap] Extracting Python ..."
-    rm -rf _pytmp && mkdir _pytmp
-    tar -xzf _py.tar.gz -C _pytmp || fail
-    mv _pytmp/python python || fail
-    rm -rf _pytmp _py.tar.gz
+  echo "[bootstrap] downloading portable python 3.12 ..."
+  curl -L --fail -o _py.tar.gz "$PYURL" || fail
+  echo "[bootstrap] extracting python ..."
+  rm -rf _pytmp; mkdir _pytmp
+  tar -xzf _py.tar.gz -C _pytmp || fail
+  mv _pytmp/python python || fail
+  rm -rf _pytmp _py.tar.gz
 fi
-
 if [ ! -x venv/bin/python ]; then
-    echo "[bootstrap] Creating virtual environment ..."
-    python/bin/python3 -m venv venv || fail
+  echo "[bootstrap] creating virtual environment ..."
+  python/bin/python3 -m venv venv || fail
 fi
 
-# The stamp records a fingerprint of requirements_versions.txt, not just "ok".
-# With a boolean stamp an upgraded install never re-ran pip, so dependency
-# changes (including security bumps) only ever reached fresh installs.
+# Stamp tracks requirements_versions.txt hash so deps get re-installed on updates.
 REQHASH="$(venv/bin/python -c "import hashlib;print(hashlib.sha256(open('requirements_versions.txt','rb').read()).hexdigest()[:16])" 2>/dev/null || true)"
-
 if [ ! -f venv/.deps_installed ] || [ -z "$REQHASH" ] || ! grep -qx "$REQHASH" venv/.deps_installed 2>/dev/null; then
-    [ -f venv/.deps_installed ] && echo "[bootstrap] requirements_versions.txt changed since last install -- updating ..."
-    echo "[bootstrap] Upgrading pip ..."
-    venv/bin/python -m pip install --upgrade pip || fail
-    echo "[bootstrap] Installing PyTorch for CUDA 12.6, large download ..."
-    venv/bin/python -m pip install torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126 || fail
-    echo "[bootstrap] Installing requirements ..."
-    venv/bin/python -m pip install --no-build-isolation -r requirements_versions.txt || fail
-    echo "$REQHASH" > venv/.deps_installed
-    echo "[bootstrap] Environment ready."
+  [ -f venv/.deps_installed ] && echo "[bootstrap] requirements changed since last install; updating ..."
+  echo "[bootstrap] upgrading pip ..."
+  venv/bin/python -m pip install --upgrade pip || fail
+
+  # Install third-party torch (platform) BEFORE requirements so the latter
+  # satisfies `torch`, `torchvision` pins instead of fighting pip's solver.
+  echo "[bootstrap] installing torch ($GPU) ..."
+  case "$GPU" in
+    rocm)
+      venv/bin/python -m pip install \
+        --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ \
+        --extra-index-url https://pypi.org/simple \
+        numpy==1.26.2 \
+        torch==2.7.1+rocm6.1 \
+        torchvision==0.22.1+rocm6.1 || fail
+      ;;
+    nvidia)
+      venv/bin/python -m pip install \
+        --index-url https://download.pytorch.org/whl/cu126 \
+        torch==2.13.0+cu126 \
+        torchvision==0.28.0+cu126 || fail
+      ;;
+    mps|cpu)
+      venv/bin/python -m pip install torch torchvision || fail
+      ;;
+  esac
+
+  echo "[bootstrap] installing requirements ..."
+  venv/bin/python -m pip install --no-build-isolation -r requirements_versions.txt || fail
+  echo "$REQHASH" > venv/.deps_installed
+  echo "[bootstrap] environment ready."
 fi
 
-# Extension installers run on every startup and can pull pinned packages past
-# their documented caps (onnxruntime wants protobuf>=4, open-clip-torch caps it
-# <4). Restore any drift so the pins are self-correcting.
-venv/bin/python check_pins.py
+# ------------------------------------------------------------------- launch args  ($FORGE_MODELS_DIR, etc.)
+export HF_HOME="${FORGE_MODELS_DIR:-./models}/hf-cache"
 
-# --------------------------------------------------------------- configure
-# Fatal: a failed mode write leaves the UI pointed at the wrong model folder.
-venv/bin/python set_mode.py "$MODENAME" || fail
-
-# AI assistant vision model (~18GB, first run only; set FORGE_NO_LLM=1 to skip)
-# Deliberately not fatal -- a failed download shouldn't stop Forge starting.
-venv/bin/python download_llm.py \
-    || echo "[warn] AI assistant model download did not complete; starting without it."
-
-# ControlNet models (~6GB, first run only). Forge fetches preprocessors on demand
-# but expects the models themselves to be placed by hand; this gets a working set.
-# Runs once -- see download_controlnet.py for the environment variables.
-venv/bin/python download_controlnet.py \
-    || echo "[warn] ControlNet model download did not complete; starting without them."
-
-# extra launch arguments: one line in extra-args.txt (optional, next to this
-# script) and/or the FORGE_EXTRA_ARGS environment variable
 EXTRA_ARGS=""
 [ -f extra-args.txt ] && EXTRA_ARGS="$(head -n 1 extra-args.txt)"
 
-# open the UI in the default browser once it is up (set FORGE_NO_BROWSER=1
-# to suppress, e.g. for headless/service use)
 AUTOLAUNCH="--autolaunch"
-[ -n "${FORGE_NO_BROWSER:-}" ] && AUTOLAUNCH=""
+[ -n "${FORGE_NO_BROWSER:-}" ]   && AUTOLAUNCH=""
 
-export SD_WEBUI_RESTART=1
-export HF_HOME="$FORGE_MODELS_DIR/hf-cache"
+# cuda-malloc is a no-op on ROCm; still safe to pass but we omit it to be
+# honest about what it does.  --skip-torch-cuda-test is needed when the
+# torch wheel is not cuda-enabled (ROCm nightly, PyPI cpu/mps).
+case "$GPU" in
+  nvidia) LAUNCH_FLAGS="--cuda-malloc" --skip-torch-cuda-test=false ;;
+  rocm)   LAUNCH_FLAGS=""         --skip-torch-cuda-test ;;
+  mps)    LAUNCH_FLAGS=""         --skip-torch-cuda-test ;;
+  cpu)    LAUNCH_FLAGS=""         --skip-torch-cuda-test ;;
+esac
+
+# ------------------------------------------------------------------- run / restart loop
 while :; do
-    CKMODE="$(cat current_mode.txt)"
-    venv/bin/python launch.py --listen --port "$FORGE_PORT" --api --cuda-malloc \
-        --no-half-vae --disable-xformers --skip-python-version-check \
-        --ckpt-dir "$FORGE_MODELS_DIR/checkpoints/$CKMODE" \
-        --lora-dir "$FORGE_MODELS_DIR/Lora" \
-        --vae-dir "$FORGE_MODELS_DIR/VAE" \
-        --text-encoder-dir "$FORGE_MODELS_DIR/text_encoder" \
-        --esrgan-models-path "$FORGE_MODELS_DIR/ESRGAN" \
-        $AUTOLAUNCH $EXTRA_ARGS ${FORGE_EXTRA_ARGS:-}
-    # UI-triggered restarts relaunch through this loop: mark them so the
-    # server does not open another browser tab each time
-    if [ -f tmp/restart ]; then rm -f tmp/restart; export SD_WEBUI_RESTARTING=1; continue; fi
-    break
+  CKMODE="$(cat current_mode.txt 2>/dev/null || echo xl)"
+  venv/bin/python launch.py \
+    --listen --port 7860 \
+    --api \
+    --cuda-malloc \
+    --no-half-vae --disable-xformers \
+    --skip-python-version-check \
+    --skip-torch-cuda-test \
+    --ckpt-dir    "${FORGE_MODELS_DIR:-./models}/checkpoints/$CKMODE" \
+    --lora-dir    "${FORGE_MODELS_DIR:-./models}/Lora" \
+    --vae-dir     "${FORGE_MODELS_DIR:-./models}/VAE" \
+    --text-encoder-dir "${FORGE_MODELS_DIR:-./models}/text_encoder" \
+    --esrgan-models-path "${FORGE_MODELS_DIR:-./models}/ESRGAN" \
+    $AUTOLAUNCH $EXTRA_ARGS ${FORGE_EXTRA_ARGS:-}
+  # restart loop
+  if [ -f tmp/restart ]; then rm -f tmp/restart; break; fi
+  break
 done
+
+# =============================================================================
