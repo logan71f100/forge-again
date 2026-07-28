@@ -52,8 +52,19 @@ class ParameterGGUF(torch.nn.Parameter):
     def to(self, *args, **kwargs):
         return self.copy_with_data(self.data.to(*args, **kwargs))
 
+    def detach(self):
+        # Must return the SAME type. torch.nn.Parameter.detach() returns a plain
+        # Tensor, but newer PyTorch rejects re-wrapping a Parameter subclass whose
+        # detach() doesn't return that subclass ("Creating a Parameter from an
+        # instance of type ParameterGGUF requires that detach() returns an
+        # instance of the same type ..."), which broke GGUF checkpoint loading.
+        # copy_with_data carries the gguf metadata across, like to()/pin_memory().
+        return self.copy_with_data(self.data.detach())
+
     def pin_memory(self, device=None):
-        return self.copy_with_data(torch.Tensor.pin_memory(self, device=device))
+        # self.data, not self: pin the underlying storage, not the ParameterGGUF
+        # wrapper (which carries the quant metadata copy_with_data re-attaches).
+        return self.copy_with_data(self.data.pin_memory(device=device))
 
 
 def dequantize_tensor(tensor):
