@@ -958,6 +958,24 @@ def check_gpu_generation() -> None:
                     record("gpu: img2img round-trip", PASS)
             except Exception as e:
                 record("gpu: img2img round-trip", FAIL, str(e)[:200])
+
+            # --- DeepBooru interrogate returns tags --------------------------
+            # The interrogators sit on a different stack (their own model loaders
+            # + torch paths) than generation, so nothing above exercises them.
+            # CLIP's loader already broke once on transformers 5; this covers the
+            # DeepBooru half. First run downloads the model, hence the patience.
+            try:
+                r6 = s.post("/sdapi/v1/interrogate", {"image": first, "model": "deepdanbooru"})
+                caption = (r6 or {}).get("caption")
+                if caption and caption.strip():
+                    record("gpu: deepbooru interrogate returns tags", PASS, f"{caption[:60]!r}")
+                else:
+                    record("gpu: deepbooru interrogate returns tags", FAIL,
+                           f"empty caption: {r6!r}")
+            except Exception as e:
+                record("gpu: deepbooru interrogate returns tags", FAIL,
+                       f"{type(e).__name__}: {str(e)[:150]}\n         server said:\n         "
+                       + s.recent_errors())
     except Exception as e:
         record("gpu: session", FAIL, f"{type(e).__name__}: {str(e)[:300]}")
 
