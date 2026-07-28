@@ -5,14 +5,15 @@ Python 3.12, torch 2.13+cu126 and every dependency, so the container starts in
 about 30 seconds instead of bootstrapping ~12 GB on first run.
 
 Nothing about the image is host-specific — if `docker run --gpus all` works on your
-machine, this works. Verified end to end on an RTX 2080 Ti (11 GB): the image builds,
-the GPU is visible inside the container, and SDXL generation produces images.
+machine, this works. Verified end to end on an RTX 2080 Ti (11 GB) at **v1.5**: the image
+builds (~8 minutes, 12.2 GB), `docker compose up -d` brings it up healthy in about 15
+seconds, the GPU is visible inside the container, and txt2img generation produces images.
 
 ## Requirements
 
 - **Docker Engine** with the **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)** (this is what gives containers GPU access — plain Docker is not enough)
 - An NVIDIA GPU + driver on the host. No CUDA toolkit needed on the host; the torch wheels bring their own runtime.
-- ~15 GB of disk for the image, plus your models.
+- ~13 GB of disk for the image (12.2 GB as built at v1.5), plus your models.
 
 Confirm GPU passthrough works before going further:
 
@@ -32,7 +33,8 @@ mkdir -p models outputs && touch config.json
 docker compose up -d
 ```
 
-The first build takes a while (it downloads torch and the dependency set). Watch it with:
+The first build takes a while — about 8 minutes on a fast connection, most of it spent
+downloading torch and the CUDA wheels. Watch it with:
 
 ```bash
 docker compose logs -f
