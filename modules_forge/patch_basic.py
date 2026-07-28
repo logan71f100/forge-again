@@ -39,6 +39,19 @@ def build_loaded(module, loader_name):
         except Exception as e:
             result = None
             exp = str(e) + '\n'
+
+            # Only quarantine the file when the error actually indicates a bad
+            # file. Upstream renamed on ANY exception, so a transient failure
+            # (out of RAM/VRAM while another process holds memory, a busy file
+            # handle, Ctrl+C mid-load) would "corrupt"-flag a perfectly good
+            # multi-GB model and the user would have to re-download it.
+            corruption_types = ('SafetensorError', 'UnpicklingError', 'BadZipFile', 'EOFError', 'JSONDecodeError')
+            corruption_markers = ('header', 'corrupt', 'invalid load key', 'central directory', 'unexpected end of data')
+            looks_corrupted = type(e).__name__ in corruption_types or any(m in str(e).lower() for m in corruption_markers)
+
+            if not looks_corrupted:
+                raise
+
             for path in list(args) + list(kwargs.values()):
                 if isinstance(path, str):
                     if os.path.exists(path):
