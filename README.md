@@ -127,6 +127,18 @@ Commonly useful extras (`venv\Scripts\python.exe launch.py --help` lists everyth
 | `--no-hashing` | skip checkpoint hashing for faster model loads (infotexts lose the model hash) |
 | `--loglevel DEBUG` | verbose server logging |
 
+### NVIDIA performance flags (opt-in)
+
+All off by default — add them via `extra-args.txt` / `FORGE_EXTRA_ARGS` if you want them:
+
+| argument | effect |
+|---|---|
+| `--cudnn-benchmark` | let cuDNN autotune conv kernels. Faster when you generate at the same resolution repeatedly; adds a small one-time cost each time the resolution changes. |
+| `--tf32` | TF32 matmul/conv math on RTX 30xx (Ampere) and newer — a solid speedup for a tiny, normally invisible precision loss. Ignored (with a note) on older GPUs. |
+| `--use-sage-attention` | route attention through [SageAttention](https://github.com/thu-ml/SageAttention) (quantized attention kernels) if you've installed it into the venv (`pip install sageattention`). Falls back to PyTorch attention if it isn't installed or a mask is required. |
+
+Note: xformers is deliberately not used — PyTorch's built-in SDPA (flash + memory-efficient attention) is enabled automatically on NVIDIA and covers the same ground on torch ≥ 2.
+
 ## Credits
 
 ### Base projects

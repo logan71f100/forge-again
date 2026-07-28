@@ -339,6 +339,40 @@ def attention_pytorch(q, k, v, heads, mask=None, attn_precision=None, skip_resha
     return out
 
 
+# Opt-in SageAttention backend (--use-sage-attention). Imported once at module load;
+# if the package isn't installed we log and leave it disabled so the normal backend runs.
+SAGE_ATTENTION = None
+if args.use_sage_attention:
+    try:
+        from sageattention import sageattn as _sageattn
+        SAGE_ATTENTION = _sageattn
+        print("SageAttention loaded (--use-sage-attention).")
+    except Exception as e:
+        print(f"--use-sage-attention requested but SageAttention could not be imported ({e}); "
+              f"falling back to the default attention backend.")
+
+
+def attention_sage(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False):
+    # SageAttention has no arbitrary additive-mask path; when a mask is present fall
+    # back to SDPA so correctness is never traded for the speedup.
+    if SAGE_ATTENTION is None or mask is not None:
+        return attention_pytorch(q, k, v, heads, mask=mask, attn_precision=attn_precision, skip_reshape=skip_reshape)
+
+    if skip_reshape:
+        b, _, _, dim_head = q.shape
+    else:
+        b, _, dim_head = q.shape
+        dim_head //= heads
+        q, k, v = map(
+            lambda t: t.view(b, -1, heads, dim_head).transpose(1, 2),
+            (q, k, v),
+        )
+
+    out = SAGE_ATTENTION(q, k, v, tensor_layout="HND", is_causal=False)
+    out = out.transpose(1, 2).reshape(b, -1, heads * dim_head)
+    return out
+
+
 def slice_attention_single_head_spatial(q, k, v):
     r1 = torch.zeros_like(k, device=q.device)
     scale = (int(q.shape[-1]) ** (-0.5))
@@ -427,7 +461,10 @@ def pytorch_attention_single_head_spatial(q, k, v):
     return out
 
 
-if memory_management.xformers_enabled():
+if SAGE_ATTENTION is not None:
+    print("Using SageAttention for cross attention")
+    attention_function = attention_sage
+elif memory_management.xformers_enabled():
     print("Using xformers cross attention")
     attention_function = attention_xformers
 elif memory_management.pytorch_attention_enabled():

@@ -56,6 +56,18 @@ parser.add_argument("--cuda-malloc", action="store_true")
 parser.add_argument("--cuda-stream", action="store_true")
 parser.add_argument("--pin-shared-memory", action="store_true")
 
+# Opt-in NVIDIA performance tuning (all off by default; safe on Ampere/Ada/Hopper).
+#   --cudnn-benchmark    lets cuDNN autotune conv algorithms (faster once shapes are
+#                        stable; adds a one-time cost when input shapes change).
+#   --tf32               enables TF32 matmul/conv math on Ampere+ (big speedup, tiny
+#                        precision loss). Guarded to Ampere+ at apply time.
+#   --use-sage-attention routes attention through SageAttention (INT8/FP8 quantized
+#                        attention) when the package is installed; falls back with a
+#                        warning if the import fails.
+parser.add_argument("--cudnn-benchmark", action="store_true")
+parser.add_argument("--tf32", action="store_true")
+parser.add_argument("--use-sage-attention", action="store_true")
+
 parser.add_argument("--disable-gpu-warning", action="store_true")
 
 args = parser.parse_known_args()[0]

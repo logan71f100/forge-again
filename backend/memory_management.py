@@ -235,6 +235,28 @@ if ENABLE_PYTORCH_ATTENTION:
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
 
+# Opt-in NVIDIA performance tuning (see backend/args.py). All off unless the user asks.
+if args.cudnn_benchmark:
+    try:
+        torch.backends.cudnn.benchmark = True
+        print("Enabled cuDNN autotuner (--cudnn-benchmark).")
+    except Exception as e:
+        print(f"Could not enable cuDNN benchmark: {e}")
+
+if args.tf32:
+    try:
+        # TF32 is an Ampere+ (compute capability >= 8) feature. On older GPUs the
+        # flags are silently ignored by PyTorch, but only advertise it where real.
+        is_ampere_plus = is_nvidia() and torch.cuda.get_device_properties(torch.cuda.current_device()).major >= 8
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        if is_ampere_plus:
+            print("Enabled TF32 matmul/conv math (--tf32).")
+        else:
+            print("--tf32 requested but this GPU is pre-Ampere; TF32 has no effect here.")
+    except Exception as e:
+        print(f"Could not enable TF32: {e}")
+
 if args.always_low_vram:
     set_vram_to = VRAMState.LOW_VRAM
     lowvram_available = True
