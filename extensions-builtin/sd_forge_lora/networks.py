@@ -103,6 +103,20 @@ def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=No
 
     if current_sd.forge_objects.unet.model.storage_dtype in [torch.float32, torch.float16, torch.bfloat16]:
         online_mode = False
+    elif current_sd.forge_objects.unet.model.storage_dtype == 'gguf' and not online_mode:
+        # An offline merge dequantizes, merges, then RE-quantizes the weight, which
+        # needs a pytorch quantizer for the checkpoint's quant type -- only a few
+        # (Q4_0/Q5_0/Q8_0) have one. For the rest (Q6_K etc.) upstream raised
+        # NotImplementedError telling the user to switch to "(fp16 LoRA)"; do that
+        # switch automatically instead.
+        unsupported = set()
+        for p in current_sd.forge_objects.unet.model.diffusion_model.parameters():
+            gguf_cls = getattr(p, 'gguf_cls', None)
+            if gguf_cls is not None and 'quantize_blocks_pytorch' not in gguf_cls.__dict__:
+                unsupported.add(gguf_cls.__name__)
+        if unsupported:
+            print(f'[LORA] {", ".join(sorted(unsupported))} GGUF weights cannot be re-quantized after an offline LoRA merge; applying LoRA online in fp16 instead.')
+            online_mode = True
 
     compiled_lora_targets = []
     for a, b, c in zip(networks_on_disk, unet_multipliers, te_multipliers):
