@@ -432,6 +432,15 @@ case "$GPU" in
   *)      LAUNCH_FLAGS="--skip-torch-cuda-test" ;;
 esac
 
+# --------------------------------------------------------------- configure mode
+# Apply the sd/xl/flux profile: set_mode.py writes current_mode.txt plus the
+# per-mode config (checkpoint, VAE/text-encoder modules, UI defaults). Without
+# it `./start.sh sd` only exported the Replacer env vars while CKMODE below fell
+# back to "xl", so the launcher pointed at the wrong checkpoint folder and none
+# of the per-mode settings applied. Fatal, as on the Windows launcher: a failed
+# mode write leaves the UI pointed at the wrong model folder.
+venv/bin/python set_mode.py "$MODENAME" || fail
+
 # ------------------------------------------------------------------- run / restart loop
 while :; do
   CKMODE="$(cat current_mode.txt 2>/dev/null || echo xl)"
