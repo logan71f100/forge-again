@@ -165,6 +165,14 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
                     print(f'Using pre-quant state dict!')
                     if state_dict_dtype in ['gguf']:
                         beautiful_print_gguf_state_dict_statics(state_dict)
+            else:
+                # "Automatic": consult the hardware. If the fp16/bf16 weights can't fit
+                # in VRAM anyway (guaranteed CPU-swap territory) and this device/torch
+                # stack supports float8 storage, store in fp8 to halve the footprint.
+                auto_dtype = memory_management.auto_unet_storage_dtype(model_params=state_dict_parameters)
+                if auto_dtype is not None:
+                    print(f'Automatic Diffusion in Low Bits: model does not fit in VRAM at {storage_dtype}; using {auto_dtype} storage. Select a mode explicitly in "Diffusion in Low Bits" to override.')
+                    storage_dtype = auto_dtype
 
             load_device = memory_management.get_torch_device()
             computation_dtype = memory_management.get_computation_dtype(load_device, parameters=state_dict_parameters, supported_dtypes=guess.supported_inference_dtypes)

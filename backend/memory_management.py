@@ -816,6 +816,43 @@ def unet_dtype(device=None, model_params=0, supported_dtypes=[torch.float16, tor
     return torch.float32
 
 
+def auto_unet_storage_dtype(model_params=0):
+    """Hardware-aware pick for "Diffusion in Low Bits: Automatic".
+
+    Consulted at model load. Returns a low-bits storage dtype when the hardware
+    both supports it and would benefit, else None (keep the fp16/bf16 pick from
+    unet_dtype). The support list, explicitly:
+
+      NVIDIA CUDA        float8 storage OK (any generation -- fp8 here is storage
+                         only; compute upcasts via manual cast, so Turing works)
+      AMD ROCm           no auto low-bits (fp8 tensor support in ROCm torch is
+                         inconsistent across gfx targets)
+      Intel XPU / MPS /  no auto low-bits
+      CPU / DirectML
+
+    The benefit test: only downgrade when the model's fp16 weights cannot fit in
+    total VRAM minus a working reserve -- i.e. generation would be CPU-swap-bound
+    regardless, and halving the footprint is a clear speed win. Models that fit
+    (SD1.5/SDXL on most cards) stay at full fp16/bf16 quality.
+    """
+    if model_params <= 0:
+        return None
+    if cpu_state != CPUState.GPU or directml_enabled or is_intel_xpu() or is_rocm() or not is_nvidia():
+        return None
+    if not hasattr(torch, 'float8_e4m3fn'):
+        return None
+
+    device = get_torch_device()
+    fp16_bytes = model_params * 2
+    reserve = 2 * 1024 * 1024 * 1024  # VAE/text-encoder headroom + inference memory
+    budget = get_total_memory(device) - reserve
+
+    if fp16_bytes > budget:
+        return torch.float8_e4m3fn
+
+    return None
+
+
 def get_computation_dtype(inference_device, parameters=0, supported_dtypes=[torch.float16, torch.bfloat16, torch.float32]):
     for candidate in supported_dtypes:
         if candidate == torch.float16:
