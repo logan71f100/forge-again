@@ -10,9 +10,16 @@ function dimensionChange(e, is_width, is_height) {
         currentHeight = e.target.value * 1.0;
     }
 
-    var inImg2img = gradioApp().querySelector("#tab_img2img").style.display == "block";
+    // img2img builds lazily -- #tab_img2img does not exist until that tab is
+    // first opened, and this runs on every UI update, so an unguarded deref threw
+    // "Cannot read properties of null (reading 'style')" while using other tabs.
+    var img2imgTab = gradioApp().querySelector("#tab_img2img");
+    if (!img2imgTab) {
+        return;
+    }
 
-    if (!inImg2img) {
+    // gradio 6 renders the active tab panel as display:flex, not block.
+    if (img2imgTab.style.display === "none" || !img2imgTab.offsetParent) {
         return;
     }
 

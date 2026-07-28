@@ -41,11 +41,17 @@ class OpenposeEditor(object):
 
     def render_edit(self):
         """Renders the buttons in preview image control button group."""
-        # The hidden button to trigger a re-render of generated image.
-        self.render_button = gr.Button(visible=False, elem_classes=["cnet-render-pose"])
-        # The hidden element that stores the pose json for backend retrieval.
-        # The front-end javascript will write the edited JSON data to the element.
-        self.pose_input = gr.Textbox(visible=False, elem_classes=["cnet-pose-json"])
+        # Both of these are driven by openpose_editor.js (it clicks the button and
+        # writes the edited JSON into the textbox), so they must EXIST in the DOM.
+        # gradio 6 does not mount visible=False components at all, which left the
+        # JS with nothing to find -- pose editing silently did nothing. Mount them
+        # CSS-hidden instead (same webui-hidden-mounted pattern as ForgeCanvas's
+        # LogicalImage). The textbox also needs an explicit value: gradio 6 renders
+        # a Textbox by calling .trim() on its value, so a None value threw
+        # "Cannot read properties of null" the first time the preview group was
+        # shown.
+        self.render_button = gr.Button(visible=True, elem_classes=["cnet-render-pose", "webui-hidden-mounted"])
+        self.pose_input = gr.Textbox(value="", visible=True, elem_classes=["cnet-pose-json", "webui-hidden-mounted"])
 
         self.modal = ModalInterface(
             # Use about:blank here as placeholder so that the iframe does not
