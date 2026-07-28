@@ -1,5 +1,14 @@
 # forge-again — Porting notes (Gradio 4 → 6 modernization)
 
+> **Upstream status (surveyed 2026-07-26):** lllyasviel/stable-diffusion-webui-forge
+> has been dormant since 2025-06-26 — our fork point (`dfdcbab6`) IS upstream's
+> current HEAD, so there is nothing to sync inbound and upstream/main never needs
+> re-auditing. The only living Forge lineage worth an occasional backend-fixes
+> skim is Haoming02/sd-webui-forge-classic (`neo` branch). Automated sync is
+> impossible anyway (this repo's history is a squashed orphan); recommended
+> cadence is a twice-yearly `git ls-remote` check that upstream HEAD is still
+> `dfdcbab6`, plus a skim of forge-classic.
+
 How this fork brought a customized Gradio-4.40 Forge install up to the current
 stack — **Gradio 6.20, transformers 5.14, huggingface-hub 1.x, diffusers 0.39,
 torch 2.13+cu126, Python 3.12** — in a single migration, then packaged it to boot

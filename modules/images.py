@@ -168,7 +168,12 @@ def draw_grid_annotations(im, width, height, hor_texts, ver_texts, margin=0):
         for line in lines:
             fnt = initial_fnt
             fontsize = initial_fontsize
-            while drawing.multiline_textsize(line.text, font=fnt)[0] > line.allowed_width and fontsize > 0:
+            # multiline_textbbox, not multiline_textsize: the latter was removed in
+            # Pillow 10 (we ship 12) and crashed X/Y/Z plot axis legends.
+            def _text_width(f):
+                bbox = drawing.multiline_textbbox((0, 0), line.text, font=f)
+                return bbox[2] - bbox[0]
+            while _text_width(fnt) > line.allowed_width and fontsize > 0:
                 fontsize -= 1
                 fnt = get_font(fontsize)
             drawing.multiline_text((draw_x, draw_y + line.size[1] / 2), line.text, font=fnt, fill=color_active if line.is_active else color_inactive, anchor="mm", align="center")

@@ -127,10 +127,15 @@ class Toprow:
 
             self.restore_progress_button = ToolButton(value=restore_progress_symbol, elem_id=f"{self.id_part}_restore_progress", visible=False, tooltip="Restore progress")
 
-            self.token_counter = gr.HTML(value="<span>0/75</span>", elem_id=f"{self.id_part}_token_counter", elem_classes=["token-counter"], visible=False)
-            self.token_button = gr.Button(visible=False, elem_id=f"{self.id_part}_token_button")
-            self.negative_token_counter = gr.HTML(value="<span>0/75</span>", elem_id=f"{self.id_part}_negative_token_counter", elem_classes=["token-counter"], visible=False)
-            self.negative_token_button = gr.Button(visible=False, elem_id=f"{self.id_part}_negative_token_button")
+            # token-counters.js relocates the counters onto the prompt boxes and clicks the
+            # buttons to refresh them. gradio 6 does not mount visible=False components, so
+            # all four must be created visible; the counters start CSS-hidden (style.css
+            # .block.token-counter) until toggleTokenCountingVisibility shows them, and the
+            # buttons stay permanently CSS-hidden via webui-hidden-mounted.
+            self.token_counter = gr.HTML(value="<span>0/75</span>", elem_id=f"{self.id_part}_token_counter", elem_classes=["token-counter"], visible=True)
+            self.token_button = gr.Button(visible=True, elem_classes=['webui-hidden-mounted'], elem_id=f"{self.id_part}_token_button")
+            self.negative_token_counter = gr.HTML(value="<span>0/75</span>", elem_id=f"{self.id_part}_negative_token_counter", elem_classes=["token-counter"], visible=True)
+            self.negative_token_button = gr.Button(visible=True, elem_classes=['webui-hidden-mounted'], elem_id=f"{self.id_part}_negative_token_button")
 
             self.clear_prompt_button.click(
                 fn=lambda *x: x,

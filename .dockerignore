@@ -7,8 +7,14 @@
 # Host environments -- the image builds its own.
 venv/
 python/
+node/
 _pytmp/
 _venv312_install.log
+
+# OneTrainer engine: bootstrapped at runtime by --enable-training (see
+# extensions/forge-onetrainer), ~5 GB with its own venv. Never baked in.
+onetrainer-engine/
+extensions/forge-onetrainer/OneTrainer/
 
 # Large runtime data: bind-mounted instead of baked in.
 models/
@@ -31,11 +37,14 @@ styles.csv
 forge-llm/*.exe
 forge-llm/*.dll
 
-# Caches
-__pycache__/
-*.pyc
-.pytest_cache/
-node_modules/
+# Caches. These need the ** prefix: a plain "__pycache__/" is anchored at the
+# context root and leaves every nested one in place -- which baked ~11 MB of
+# host-compiled bytecode into the image, about half of it cpython-310 that the
+# image's Python 3.12 can never load.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/node_modules/
 
 # Docs and media aren't needed to run the app.
 docs/images/

@@ -151,6 +151,47 @@ original_Block_get_component_class_id = patches.patch(__name__, obj=gr.blocks.Bl
 ui_tempdir.install_ui_tempdir_override()
 
 
+# --- opt-in dependency debugging (FORGE_DEP_DEBUG=1) -------------------------
+# When a session fires an event whose inputs/outputs reference components that
+# do not exist in that session (the cross-session render-leak class of bug), the
+# stock traceback says only "KeyError: <id>". This wrapper names the offending
+# dependency: its fn, trigger targets and full input/output id lists.
+if __import__('os').environ.get('FORGE_DEP_DEBUG') == '1':
+    def _describe_block_fn(block_fn):
+        try:
+            fn_name = getattr(getattr(block_fn, 'fn', None), '__name__', repr(getattr(block_fn, 'fn', None)))
+            ins = [getattr(b, '_id', '?') for b in (getattr(block_fn, 'inputs', None) or [])]
+            outs = [getattr(b, '_id', '?') for b in (getattr(block_fn, 'outputs', None) or [])]
+            targets = getattr(block_fn, 'targets', None)
+            js = (getattr(block_fn, 'js', '') or '')[:60]
+            return f"fn={fn_name} targets={targets} inputs={ins} outputs={outs} js={js!r}"
+        except Exception as e:
+            return f"(describe failed: {e})"
+
+    _orig_postprocess_data = gr.blocks.Blocks.postprocess_data
+
+    async def _dbg_postprocess_data(self, block_fn, predictions, state):
+        try:
+            return await _orig_postprocess_data(self, block_fn, predictions, state)
+        except KeyError as e:
+            print(f"[dep-debug] postprocess KeyError {e} in dependency: {_describe_block_fn(block_fn)}", flush=True)
+            raise
+
+    gr.blocks.Blocks.postprocess_data = _dbg_postprocess_data
+
+    _orig_preprocess_data = gr.blocks.Blocks.preprocess_data
+
+    async def _dbg_preprocess_data(self, *args, **kwargs):
+        try:
+            return await _orig_preprocess_data(self, *args, **kwargs)
+        except KeyError as e:
+            bf = args[0] if args else kwargs.get('block_fn')
+            print(f"[dep-debug] preprocess KeyError {e} in dependency: {_describe_block_fn(bf)}", flush=True)
+            raise
+
+    gr.blocks.Blocks.preprocess_data = _dbg_preprocess_data
+
+
 def gradio_component_meta_create_or_modify_pyi(component_class, class_name, events):
     if hasattr(component_class, 'webui_do_not_create_gradio_pyi_thank_you'):
         return

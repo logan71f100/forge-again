@@ -716,6 +716,16 @@ class ScriptRunner:
 
     def prepare_ui(self):
         self.inputs = [None]
+        # Reset the paste registries too, not just inputs. setup_ui() APPENDS to
+        # these, which was fine when the UI was built exactly once -- but the
+        # lazy tabs rebuild per browser session, so a second session's list would
+        # still contain the first session's (dead) components. Those stale ids
+        # then rode along in the new session's "Send to img2img" paste outputs
+        # and made the whole paste event 500 (KeyError on the foreign id) --
+        # params silently never arrived. Sessions already wired keep their own
+        # dependency objects, so resetting here cannot affect them.
+        self.infotext_fields = []
+        self.paste_field_names = []
 
     def setup_ui(self):
         all_titles = [wrap_call(script.title, script.filename, "title") or script.filename for script in self.scripts]

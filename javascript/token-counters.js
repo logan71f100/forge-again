@@ -46,7 +46,9 @@ function recalculate_prompts_img2img() {
 function setupTokenCounting(id, id_counter, id_button) {
     var prompt = gradioApp().getElementById(id);
     var counter = gradioApp().getElementById(id_counter);
-    var textarea = gradioApp().querySelector(`#${id} > label > textarea`);
+    // gradio 6 puts a div.input-container between the label and the textarea,
+    // so the old `> label > textarea` selector no longer matches
+    var textarea = gradioApp().querySelector(`#${id} textarea`);
 
     // img2img prompts live in a lazily-built tab, so these are null at load.
     // Bail quietly; setupTokenCounting is retried once img2img mounts.
@@ -86,18 +88,20 @@ function runCodeForTokenCounters(fun) {
 }
 
 onUiLoaded(function() {
-    runCodeForTokenCounters(setupTokenCounting);
-    // img2img is lazy, so its prompts aren't set up on the first pass. Retry
-    // once they appear; setupTokenCounting is a no-op when already wired.
-    if (!gradioApp().querySelector('#img2img_token_counter')) {
-        var obs = new MutationObserver(function() {
-            if (gradioApp().querySelector('#img2img_token_counter')) {
-                runCodeForTokenCounters(setupTokenCounting);
-                obs.disconnect();
-            }
-        });
-        obs.observe(gradioApp(), {childList: true, subtree: true});
+    function wireUpTokenCounters() {
+        runCodeForTokenCounters(setupTokenCounting);
+        // visibility is normally applied by onOptionsChanged, which may have
+        // already run before a counter mounted -- re-apply once opts exist
+        if (Object.keys(opts).length) {
+            runCodeForTokenCounters(toggleTokenCountingVisibility);
+        }
     }
+    wireUpTokenCounters();
+    // gradio 6 mounts components progressively (the counters can appear after
+    // #txt2img_prompt triggers uiLoaded), builds img2img lazily, and remounts a
+    // tab's children on tab switches, so counters can (re)appear unwired at any
+    // time. Keep observing; setupTokenCounting no-ops when already wired.
+    new MutationObserver(wireUpTokenCounters).observe(gradioApp(), {childList: true, subtree: true});
 });
 
 onOptionsChanged(function() {

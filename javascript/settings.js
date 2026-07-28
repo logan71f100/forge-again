@@ -14,7 +14,8 @@ function settingsShowAllTabs() {
 }
 
 function settingsShowOneTab() {
-    gradioApp().querySelector('#settings_show_one_page').click();
+    // Settings is lazily built; this can fire before the button exists.
+    gradioApp().querySelector('#settings_show_one_page')?.click();
 }
 
 function setupSettingsSearch() {
