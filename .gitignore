@@ -126,3 +126,13 @@ coverage.xml
 # launch — NVIDIA redistributables, not our code, and each exceeds GitHub's 100MB limit
 /forge-llm/cublas64_12.dll
 /forge-llm/cublasLt64_12.dll
+
+# llama.cpp source + per-backend builds that start.sh fetches, patches and
+# compiles on demand (Linux/macOS). Build products, not source — the patch in
+# forge-llm/patches is what we actually maintain. The Windows CUDA binary stays
+# committed because Windows boxes rarely have a toolchain.
+/forge-llm/src/
+/forge-llm/vulkan/
+/forge-llm/rocm/
+/forge-llm/cuda/
+/forge-llm/metal/

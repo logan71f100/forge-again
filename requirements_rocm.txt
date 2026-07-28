@@ -1,12 +1,19 @@
 # =============================================================================
-# forge-again requirements (ROCM / AMD GPU)
-# Install before requirements_versions.txt so the ROCm torch wheel satisfies
-# `torch`/`torchvision` pins and pip doesn't pull CUDA wheels.
+# forge-again requirements (ROCm / AMD GPU)
+#
+# Install BEFORE requirements_versions.txt so the ROCm wheels satisfy the
+# torch/torchvision pins and pip does not pull the CUDA builds.
+#
+# The versions here MUST stay in lockstep with requirements_versions.txt
+# (torch 2.13.0, torchvision 0.28.0) -- only the build differs. A mismatched
+# pair does not resolve at all: torchvision 0.18 pairs with torch 2.3, not 2.13.
+#
+# ROCm level: rocm7.1 is the index that publishes cp312 wheels for torch
+# 2.13.0. Override with TORCH_ROCM_INDEX if AMD ships a different level for
+# your card. Needs ~6 GB free during install.
 # =============================================================================
 
 --extra-index-url https://download.pytorch.org/whl/rocm7.1
 
-# ROCm PyTorch for AMD GPUs  
-# Note: if installation fails with disk quota error, ensure enough space (~6GB)
-torch==2.13.0+rocm7.1
-torchvision==0.18.0+rocm7.1
+torch==2.13.0
+torchvision==0.28.0

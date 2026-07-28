@@ -75,6 +75,7 @@ parser.add_argument("--disable-opt-split-attention", action='store_true', help="
 parser.add_argument("--disable-nan-check", action='store_true', help="do not check if produced images/latent spaces have nans; useful for running without a checkpoint in CI")
 parser.add_argument("--use-cpu", nargs='+', help="use CPU as torch device for specified modules", default=[], type=str.lower)
 parser.add_argument("--use-ipex", action="store_true", help="use Intel XPU as torch device")
+parser.add_argument("--rocm", action="store_true", help="install and use the AMD ROCm torch build (start.sh exports FORGE_GPU=rocm automatically when it detects an AMD GPU, which has the same effect)")
 parser.add_argument("--disable-model-loading-ram-optimization", action='store_true', help="disable an optimization that reduces RAM use when loading a model")
 parser.add_argument("--listen", action='store_true', help="launch gradio with 0.0.0.0 as server name, allowing to respond to network requests")
 parser.add_argument("--port", type=int, help="launch gradio with given server port, you need root/admin rights for ports < 1024, defaults to 7860 if available", default=None)

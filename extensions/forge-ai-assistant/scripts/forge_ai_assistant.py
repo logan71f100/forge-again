@@ -368,28 +368,36 @@ def _proc_alive():
     return p is not None and p.poll() is None
 
 
-def _kill_process(port):
-    """Kill whatever process is listening on a given port (cross-platform)."""
-    try:
-        if os.name == "nt":
-            out = subprocess.check_output(
-                ["netstat", "-ano", "-p", "tcp"], text=True, creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            for line in out.splitlines():
-                parts = line.split()
-                if len(parts) >= 5 and "LISTENING" in line and parts[1].endswith(f":{port}"):
-                    subprocess.call(["taskkill", "/PID", parts[-1], "/T", "/F"], creationflags=subprocess.CREATE_NO_WINDOW)
-                    return True
-        else:
-            out = subprocess.check_output(["fuser", f"{port}/tcp"], text=True, stderr=subprocess.DEVNULL)
-            for pid_str in out.strip().split():
-                try:
-                    pid = int(pid_str.split(":")[0] if ":" in pid_str else pid_str)
-                    os.kill(pid, signal.SIGTERM)
-                except: pass
-        return False
-    except: pass
-    return None
+_atexit_registered = False
+
+
+def _register_atexit_kill():
+    """POSIX counterpart to the Windows job object: kill the server when Forge exits.
+
+    The job object handles every Windows exit path, but POSIX has no equivalent,
+    so without this a clean shutdown leaves llama-server running and holding
+    several GB of VRAM. Registered once, on first launch.
+    """
+    global _atexit_registered
+    if _atexit_registered or os.name == "nt":
+        return
+    _atexit_registered = True
+    import atexit
+
+    def _kill_llm_atexit():
+        p = _proc.get("popen")
+        if p is None or p.poll() is not None:
+            return
+        try:
+            p.terminate()
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        except Exception:
+            pass
+
+    atexit.register(_kill_llm_atexit)
 
 
 def _kill_process_or_pid(pid):
@@ -415,12 +423,16 @@ def _pid_on_port(port):
                 if len(parts) >= 5 and "LISTENING" in line and parts[1].endswith(f":{port}"):
                     return int(parts[-1])
         else:
-            out = subprocess.check_output(["fuser", f"{port}/tcp"], text=True, stderr=subprocess.DEVNULL)
-            for pid_str in out.strip().split():
-                try:
-                    return int(pid_str.split(":")[0] if ":" in pid_str else pid_str)
-                except: pass
-    except: pass
+            # psutil, not `fuser`: fuser lives in psmisc and is absent on plenty
+            # of distros (and in slim containers), where it would fail silently
+            # and we'd never reap a stale server. psutil is already a hard
+            # dependency of this project.
+            import psutil
+            for c in psutil.net_connections(kind="tcp"):
+                if c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port == port and c.pid:
+                    return int(c.pid)
+    except Exception:
+        pass
     return None
 
 
@@ -466,14 +478,21 @@ def _llm_env():
             env["PATH"] = torch_lib + os.pathsep + env.get("PATH", "")
     except Exception:
         pass
-    env["LD_LIBRARY_PATH"] = os.pathsep.join([
-        os.path.join(_PROJECT_ROOT, "forge-llm", "vulkan"),
-        os.path.join(_PROJECT_ROOT, "forge-llm", "rocm"),
-        os.path.join(_PROJECT_ROOT, "forge-llm", "cuda"),
-        os.path.join(_PROJECT_ROOT, "forge-llm"),
-        env.get("PATH", ""),
-    ]) + os.pathsep + env.get("PATH", "")
     if os.name != "nt":
+        # Where our per-backend llama.cpp .so files live. PREPEND to any existing
+        # LD_LIBRARY_PATH rather than replacing it, and never fold PATH into it:
+        # PATH holds executable dirs, and mixing it in makes the dynamic linker
+        # stat every one of them looking for shared objects.
+        _lib_dirs = [
+            os.path.join(_PROJECT_ROOT, "forge-llm", "vulkan"),
+            os.path.join(_PROJECT_ROOT, "forge-llm", "rocm"),
+            os.path.join(_PROJECT_ROOT, "forge-llm", "cuda"),
+            os.path.join(_PROJECT_ROOT, "forge-llm"),
+        ]
+        _existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(
+            [d for d in _lib_dirs if os.path.isdir(d)] + ([_existing] if _existing else [])
+        )
         env["LLAMA_VK_EXCLUSIVE_FILL"] = "1"
     return env
 
@@ -737,12 +756,16 @@ def _start_textgen_locked(model=None):
             args=args, cwd=os.path.dirname(exe), stdout=log_f, stderr=subprocess.STDOUT,
             env=_llm_env(),
         )
-        if os.name != "nt":
-            popen_kwargs["start_new_session"] = True
-        else:
+        if os.name == "nt":
             popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # POSIX: do NOT pass start_new_session=True here. setsid() detaches the
+        # server from our process group, which is the opposite of what we want --
+        # it would survive Forge exiting and keep holding its VRAM. Staying in
+        # the group means a Ctrl-C / terminal hangup reaches it too, and
+        # _kill_llm_atexit below covers the clean-exit path.
         _proc["popen"] = subprocess.Popen(**popen_kwargs)
-    _assign_to_job(_proc["popen"])   # dies with Forge, no matter how Forge exits
+    _assign_to_job(_proc["popen"])   # Windows: dies with Forge however Forge exits
+    _register_atexit_kill()          # POSIX equivalent
     _auto["stopped_for_gen"] = False
     print(f"[forge-ai] launched llama-server (pid {_proc['popen'].pid}): {' '.join(args[1:])}")
 

@@ -27,7 +27,15 @@ detect_gpu() {
     return
   fi
 
-  # 2. NVIDIA – nvidia-smi must exist and talk to a driver.
+  # 2. macOS -> MPS. Checked early: the probes below are Linux-only (ldconfig,
+  #    rocm-smi) and just waste time on Darwin.
+  if [ "$(uname)" = "Darwin" ]; then
+    echo "[bootstrap] macOS → MPS"
+    GPU=mps
+    return
+  fi
+
+  # 3. NVIDIA – nvidia-smi must exist and talk to a driver.
   if command -v nvidia-smi >/dev/null 2>&1; then
     # try to get a name; failures look like 'not supported' or 'no data'
     local gname
@@ -40,9 +48,12 @@ detect_gpu() {
     fi
   fi
 
-  # 3. AMD – rocm-smi first; second-best: /opt/rocm exists.
+  # 4. AMD ROCm – rocm-smi that actually reports a GPU; else /opt/rocm exists.
+  #    Match on "GPU" in rocm-smi's own output rather than vendor/board strings:
+  #    the previous 'amg|asrock|amd' pattern had a typo ("amg") and could match
+  #    a motherboard brand ("asrock") on a machine with no AMD GPU at all.
   if command -v rocm-smi >/dev/null 2>&1; then
-    if rocm-smi --showall 2>&1 | grep -qiE 'amg|asrock|amd'; then
+    if rocm-smi --showid 2>/dev/null | grep -qiE '^GPU\[[0-9]+\]'; then
       echo "[bootstrap] Detected AMD GPU via rocm-smi"
       GPU=rocm
       return
@@ -55,25 +66,12 @@ detect_gpu() {
     return
   fi
 
-  # 4. Vulkan (AMD iGPU/dGPU via ggml-vulkan backend)
-  if ldconfig -p 2>/dev/null | grep -q libvulkan_radeon; then
-    if [ -d /home/logan/llama.cpp ] || [ -d ./llama.cpp ]; then
-      echo "[bootstrap] Detected AMD Vulkan (libvulkan_radeon) for ggml-vulkan backend"
-      GPU=vulkan
-      return
-    fi
-  fi
-  # fallback: any AMD vulkan driver
-  if ldconfig -p 2>/dev/null | grep -qE 'libvulkan_(rade|amd)'; then
-    echo "[bootstrap] Detected AMD Vulkan GPU (no llama.cpp found, will build)"
+  # 5. Vulkan (AMD iGPU/dGPU via the ggml-vulkan backend). Presence of the
+  #    driver is the whole test -- llama.cpp is fetched and built on demand, so
+  #    it must NOT be a precondition for detecting the GPU.
+  if ldconfig -p 2>/dev/null | grep -qE 'libvulkan_(radeon|amd)'; then
+    echo "[bootstrap] Detected AMD Vulkan driver → ggml-vulkan backend"
     GPU=vulkan
-    return
-  fi
-
-  # 5. macOS → MPS (Metal)
-  if [ "$(uname)" = "Darwin" ]; then
-    echo "[bootstrap] macOS → MPS"
-    GPU=mps
     return
   fi
 
@@ -148,76 +146,145 @@ if [ "$GPU" = "vulkan" ]; then
   export VK_LAYER_PATH=""
 fi
 
-# ------------------------------------------------------------------- build & deploy llama.cpp binaries
-LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-/home/logan/llama.cpp}"
-LLAMA_CPP_BUILD="${LLAMA_CPP_BUILD:-/tmp/forge-llama-build}"
+# ------------------------------------------------------------------- build & deploy llama.cpp (AI assistant)
+# The assistant needs a llama-server carrying our /sleep + /wake hibernate patch
+# (forge-llm/patches). Windows ships a prebuilt CUDA binary because Windows boxes
+# rarely have a compiler; on Linux/macOS a toolchain is one package away, and it
+# is the only way to get a ROCm or Vulkan build for arbitrary hardware -- so we
+# fetch the pinned source, apply the patch and build on demand.
+#
+# Everything here is BEST EFFORT. The assistant is optional, so a missing
+# compiler or a failed build must warn and let Forge start anyway -- never `fail`.
+LLAMA_CPP_COMMIT="${LLAMA_CPP_COMMIT:-33ca0dcb9d78c7c3a3b543db4c5fc9182abfe519}"   # base revision the patch applies to
+LLAMA_CPP_REPO="${LLAMA_CPP_REPO:-https://github.com/ggml-org/llama.cpp}"
+LLAMA_CPP_SRC="${LLAMA_CPP_SRC:-forge-llm/src/llama.cpp}"
+LLAMA_CPP_BUILD="${LLAMA_CPP_BUILD:-forge-llm/src/build}"
 LLAMA_CPP_DEPLOY="${LLAMA_CPP_DEPLOY:-forge-llm}"
+LLAMA_PATCH="forge-llm/patches/0001-sleep-wake-vram-hibernate.patch"
+
+# Cache key: a deployed build is reused unless the backend, the upstream commit
+# or the patch itself changes. That is the "only rebuild when it makes sense"
+# part -- a normal relaunch does no compiling at all.
+llama_stamp_now() {
+  local patch_hash
+  patch_hash="$(sha256sum "$LLAMA_PATCH" 2>/dev/null | cut -c1-16)"
+  echo "$1|$LLAMA_CPP_COMMIT|${patch_hash:-nopatch}"
+}
+
+llama_have_tools() {
+  command -v git >/dev/null 2>&1 && command -v cmake >/dev/null 2>&1 &&
+    { command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || command -v clang >/dev/null 2>&1; }
+}
+
+# Fetch the pinned source once, patched. Returns non-zero if it can't.
+llama_prepare_src() {
+  if [ -f "$LLAMA_CPP_SRC/.forge-patched" ] &&
+     [ "$(cat "$LLAMA_CPP_SRC/.forge-patched" 2>/dev/null)" = "$LLAMA_CPP_COMMIT" ]; then
+    return 0
+  fi
+  echo "[bootstrap] fetching llama.cpp @ ${LLAMA_CPP_COMMIT:0:12} ..."
+  mkdir -p "$(dirname "$LLAMA_CPP_SRC")" || return 1
+  if [ ! -d "$LLAMA_CPP_SRC/.git" ]; then
+    rm -rf "$LLAMA_CPP_SRC"
+    git clone --filter=blob:none "$LLAMA_CPP_REPO" "$LLAMA_CPP_SRC" >/dev/null 2>&1 || return 1
+  fi
+  ( cd "$LLAMA_CPP_SRC" &&
+    git fetch --depth 1 origin "$LLAMA_CPP_COMMIT" >/dev/null 2>&1 &&
+    git checkout -q --force "$LLAMA_CPP_COMMIT" &&
+    git reset -q --hard "$LLAMA_CPP_COMMIT" &&
+    git clean -qfd ) || return 1
+  echo "[bootstrap] applying sleep/wake hibernate patch ..."
+  ( cd "$LLAMA_CPP_SRC" && git apply "$OLDPWD/$LLAMA_PATCH" ) || {
+    echo "[bootstrap] WARNING: hibernate patch did not apply to ${LLAMA_CPP_COMMIT:0:12}" >&2
+    return 1
+  }
+  echo "$LLAMA_CPP_COMMIT" > "$LLAMA_CPP_SRC/.forge-patched"
+  return 0
+}
 
 build_llama() {
-  local backend="$1"    # vulkan | rocm | cuda
-  local cmake_cfg=""
+  local backend="$1"    # vulkan | rocm | cuda | metal
   local build_dir="$LLAMA_CPP_BUILD/$backend"
   local deploy_dir="$LLAMA_CPP_DEPLOY/$backend"
+  local stamp="$deploy_dir/.build-stamp"
+  local want; want="$(llama_stamp_now "$backend")"
 
-  mkdir -p "$build_dir" "$deploy_dir"
+  # up to date? nothing to do.
+  if [ -x "$deploy_dir/llama-server" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then
+    echo "[bootstrap] $backend: llama-server up to date"
+    return 0
+  fi
 
+  if ! llama_have_tools; then
+    echo "[bootstrap] NOTE: git + cmake + a C compiler are needed to build the AI assistant's" >&2
+    echo "[bootstrap]       llama-server ($backend). Skipping it; Forge will start normally." >&2
+    return 1
+  fi
+
+  local cmake_cfg
   case "$backend" in
     vulkan) cmake_cfg="-DGGML_VULKAN=ON" ;;
     rocm)   cmake_cfg="-DGGML_HIP=ON" ;;
     cuda)   cmake_cfg="-DGGML_CUDA=ON" ;;
+    metal)  cmake_cfg="-DGGML_METAL=ON" ;;
+    *)      echo "[bootstrap] unknown llama backend '$backend'" >&2; return 1 ;;
   esac
 
-  # skip if deployed binaries already exist (fast re-launch)
-  if [ -f "$deploy_dir/llama-server" ] && [ -f "$deploy_dir/libggml-$backend.so" ]; then
-    echo "[bootstrap] $backend: llama.cpp binaries already deployed"
-    return 0
-  fi
+  llama_prepare_src || {
+    echo "[bootstrap] NOTE: could not prepare patched llama.cpp source; skipping the AI assistant build." >&2
+    return 1
+  }
 
-  if [ ! -d "$LLAMA_CPP_SRC" ]; then
-    echo "[bootstrap] WARNING: $backend llama.cpp source not found at $LLAMA_CPP_SRC — LLM AI assistant will be unavailable" >&2
+  echo "[bootstrap] building llama-server ($backend) — first time only, a few minutes ..."
+  # Only the server target: LLAMA_BUILD_EXAMPLES/TESTS off keeps this from
+  # compiling the whole example suite we never ship.
+  if ! cmake -B "$build_dir" -DCMAKE_BUILD_TYPE=Release $cmake_cfg \
+        -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DBUILD_SHARED_LIBS=ON "$LLAMA_CPP_SRC" >/dev/null; then
+    echo "[bootstrap] WARNING: cmake configure failed for $backend — AI assistant unavailable." >&2
+    return 1
+  fi
+  if ! cmake --build "$build_dir" --target llama-server -j "$(nproc 2>/dev/null || echo 4)"; then
+    echo "[bootstrap] WARNING: llama-server ($backend) build failed — AI assistant unavailable." >&2
     return 1
   fi
 
-  echo "[bootstrap] building llama.cpp for $backend backend ..."
-  cmake -B "$build_dir" -DCMAKE_BUILD_TYPE=Release $cmake_cfg "$LLAMA_CPP_SRC" || fail
-  cmake --build "$build_dir" --target llama-server --target all -j "$(nproc 2>/dev/null || echo 4)" || fail
-
-  echo "[bootstrap] deploying llama.cpp $backend binaries → $deploy_dir"
-  cp "$build_dir/examples/llama-server" "$deploy_dir/" 2>/dev/null || true
-  cp "$build_dir/bin/libggml-$backend.so" "$deploy_dir/" 2>/dev/null || true
-  cp "$build_dir/bin/libggml-base.so" "$deploy_dir/" 2>/dev/null || true
-  cp "$build_dir/bin/libggml-cpu.so" "$deploy_dir/" 2>/dev/null || true
-  cp "$build_dir/bin/libllama.so" "$deploy_dir/" 2>/dev/null || true
-  cp "$build_dir/bin/libllama-common.so" "$deploy_dir/" 2>/dev/null || true
-  cp "$build_dir/bin/libllama-server-impl.so" "$deploy_dir/" 2>/dev/null || true
-  # Make binaries executable
+  # Deploy: the binary plus the shared libs it links against. Layout differs
+  # between llama.cpp revisions, so search rather than assume a path.
+  mkdir -p "$deploy_dir"
+  local server_bin
+  server_bin="$(find "$build_dir" -name llama-server -type f -perm -u+x 2>/dev/null | head -1)"
+  if [ -z "$server_bin" ]; then
+    echo "[bootstrap] WARNING: build produced no llama-server binary — AI assistant unavailable." >&2
+    return 1
+  fi
+  cp -f "$server_bin" "$deploy_dir/" || return 1
+  find "$build_dir" -name '*.so*' -type f -exec cp -f {} "$deploy_dir/" \; 2>/dev/null || true
   chmod +x "$deploy_dir/llama-server" 2>/dev/null || true
-  # Update symlinks so ldconfig can find the .so files at runtime
-  if [ -f "$deploy_dir/libggml-base.so" ]; then
-    ( cd "$deploy_dir" && ln -sf libggml-base.so libggml-base.so.0 2>/dev/null || true )
-  fi
-  if [ -f "$deploy_dir/libggml-$backend.so" ]; then
-    ( cd "$deploy_dir" && ln -sf "libggml-$backend.so" "libggml-$backend.so.0" 2>/dev/null || true )
-  fi
-  if [ -f "$deploy_dir/libllama.so" ]; then
-    ( cd "$deploy_dir" && ln -sf libllama.so libllama.so.0 2>/dev/null || true )
-  fi
-  if [ -f "$deploy_dir/libllama-common.so" ]; then
-    ( cd "$deploy_dir" && ln -sf libllama-common.so libllama-common.so.0 2>/dev/null || true )
-  fi
-  if [ -f "$deploy_dir/libllama-server-impl.so" ]; then
-    ( cd "$deploy_dir" && ln -sf libllama-server-impl.so libllama-server-impl.so.0 2>/dev/null || true )
-  fi
-  echo "[bootstrap] $backend: llama.cpp binaries deployed successfully"
+
+  # soname symlinks (libfoo.so.0 -> libfoo.so) so the loader resolves them.
+  ( cd "$deploy_dir" && for so in *.so; do
+      [ -e "$so" ] && ln -sf "$so" "$so.0" 2>/dev/null || true
+    done ) 2>/dev/null || true
+
+  echo "$want" > "$stamp"
+  echo "[bootstrap] $backend: llama-server ready → $deploy_dir"
   return 0
 }
 
-# Build & deploy for all GPU backends that matter
-case "$GPU" in
-  vulkan) build_llama vulkan ;;
-  rocm)   build_llama rocm ; build_llama vulkan ;;  # vulkan is fallback
-  cpu)    build_llama cuda ;;  # fallback to cuda for AI assistant
-esac
+# Build only for the detected backend. Each is optional: a failure warns above
+# and leaves Forge to start without the assistant.
+if [ "${FORGE_NO_LLM:-}" = "1" ]; then
+  echo "[bootstrap] FORGE_NO_LLM=1 — skipping the AI assistant's llama.cpp build"
+else
+  case "$GPU" in
+    vulkan) build_llama vulkan || true ;;
+    rocm)   build_llama rocm || build_llama vulkan || true ;;   # vulkan is the fallback backend
+    nvidia) build_llama cuda   || true ;;
+    mps)    build_llama metal  || true ;;
+    # cpu: no GPU backend to build; the assistant would be unusably slow, so skip.
+  esac
+fi
 
 # ------------------------------------------------------------------- bootstrap (portable python, venv)
 # launch.py needs `git` to clone assets / huggingface_guess / BLIP. Fail

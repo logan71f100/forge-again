@@ -418,10 +418,22 @@ def prepare_node():
               f"UI falls back to client-side render. Set SD_WEBUI_NO_SSR=1 to silence.")
 
 
+def is_rocm_requested():
+    """True when this launch should use the AMD ROCm torch build.
+
+    Either the --rocm flag or FORGE_GPU=rocm, which start.sh exports after its
+    GPU auto-detection. getattr keeps this safe if an older cmd_args (or an
+    embedding host) has no --rocm defined.
+    """
+    if getattr(args, 'rocm', False):
+        return True
+    return os.environ.get('FORGE_GPU') == 'rocm'
+
+
 def prepare_environment():
     torch_index_url = os.environ.get('TORCH_INDEX_URL', "https://download.pytorch.org/whl/cu121")
     torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.3.1 torchvision==0.18.1 --extra-index-url {torch_index_url}")
-if args.use_ipex:
+    if args.use_ipex:
         if platform.system() == "Windows":
             # The "Nuullll/intel-extension-for-pytorch" wheels were built from IPEX source for Intel Arc GPU: https://github.com/intel/intel-extension-for-pytorch/tree/xpu-main
             # This is NOT an Intel official release so please use it at your own risk!!
@@ -441,14 +453,16 @@ if args.use_ipex:
             # See https://intel.github.io/intel-extension-for-pytorch/index.html#installation for details.
             torch_index_url = os.environ.get('TORCH_INDEX_URL', "https://pytorch-extension.intel.com/release-whl/stable/xpu/us/")
             torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.0.0a0 intel-extension-for-pytorch==2.0.110+gitba7f6c1 --extra-index-url {torch_index_url}")
-    # AMD ROCm: install PyTorch ROCm build
-    elif args.rocm or (platform.system() == "Linux" and os.environ.get('FORGE_GPU') == 'rocm'):
-        torch_index_url = os.environ.get('TORCH_ROCM_INDEX', "https://download.pytorch.org/whl/rocm6.1")
-        torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.13.0+rocm6.1 torchvision==0.18.0+rocm6.1 --index-url {torch_index_url}")
+    # AMD ROCm: same torch/torchvision VERSIONS as the CUDA path, from the ROCm
+    # index. Verified to exist for cp312: torch 2.13.0+rocm7.1 and torchvision
+    # 0.28.0+rocm7.1. Keep these in lockstep with requirements_versions.txt --
+    # a mismatched pair (e.g. torchvision 0.18, which pairs with torch 2.3) does
+    # not resolve at all. Override the ROCm level with TORCH_ROCM_INDEX.
+    elif is_rocm_requested():
+        torch_index_url = os.environ.get('TORCH_ROCM_INDEX', "https://download.pytorch.org/whl/rocm7.1")
+        torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.13.0 torchvision==0.28.0 --index-url {torch_index_url}")
     requirements_file = os.environ.get('REQS_FILE', "requirements_versions.txt")
     requirements_file_for_npu = os.environ.get('REQS_FILE_FOR_NPU', "requirements_npu.txt")
-    requirements_file_for_rocm = os.environ.get('REQS_FILE_FOR_ROCM', "requirements_rocm.txt")
-    requirements_file_for_rocm = os.environ.get('REQS_FILE_FOR_ROCM', "requirements_rocm.txt")
 
     xformers_package = os.environ.get('XFORMERS_PACKAGE', 'xformers==0.0.27')
     clip_package = os.environ.get('CLIP_PACKAGE', "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip")
@@ -497,7 +511,7 @@ if args.use_ipex:
 
     if args.use_ipex:
         args.skip_torch_cuda_test = True
-    if args.rocm or os.environ.get('FORGE_GPU') == 'rocm':
+    if is_rocm_requested():
         args.skip_torch_cuda_test = True
     if not args.skip_torch_cuda_test and not check_run_python("import torch; assert torch.cuda.is_available()"):
         raise RuntimeError(

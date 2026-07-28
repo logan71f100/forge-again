@@ -117,16 +117,14 @@ def get_total_memory(dev=None, torch_total_too=False):
             mem_reserved = stats['reserved_bytes.all.current']
             mem_total_torch = mem_reserved
             mem_total = torch.xpu.get_device_properties(dev).total_memory
-        elif is_rocm():
-            try:
-                # ROCm PyTorch exposes hipMemoryGetInfo via the CUDA API shim
-                _, mem_total_rocm = torch.cuda.mem_get_info(dev)
-                mem_total_torch = mem_total_rocm
-                mem_total = mem_total_rocm
-            except Exception:
-                mem_total = 0
-                mem_total_torch = 0
         else:
+            # ROCm needs no branch of its own: a ROCm torch build serves
+            # memory_stats/mem_get_info through the CUDA API, so this path is
+            # already correct for it. (A separate ROCm branch here previously set
+            # mem_total_torch to the DEVICE TOTAL, but every other branch -- and
+            # get_free_memory's matching logic -- means "bytes reserved by
+            # torch". That mismatch inflated the figure the memory manager uses
+            # to decide what fits.)
             stats = torch.cuda.memory_stats(dev)
             mem_reserved = stats['reserved_bytes.all.current']
             _, mem_total_cuda = torch.cuda.mem_get_info(dev)
@@ -1223,15 +1221,11 @@ def soft_empty_cache(force=False):
         torch.mps.empty_cache()
     elif is_intel_xpu():
         torch.xpu.empty_cache()
-    elif is_rocm():
-        # ROCm: do NOT call empty_cache/ipc_collect without force.
-        # It causes issues on many AMD GPUs.
-        if force:
-            try:
-                torch.cuda.empty_cache()
-            except:
-                pass
     elif torch.cuda.is_available():
+        # ROCm is already covered here: `force or is_nvidia()` means an unforced
+        # call is a no-op on AMD, which is the desired behaviour (see comment).
+        # A separate is_rocm() branch above this only duplicated it -- and
+        # dropped the ipc_collect() that the forced path is supposed to do.
         if force or is_nvidia():  # This seems to make things worse on ROCm so I only do it for cuda
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()

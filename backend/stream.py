@@ -3,19 +3,16 @@ from backend.args import args
 
 
 def stream_context():
+    # NOTE (ROCm): no separate branch is needed here. A ROCm torch build reports
+    # torch.cuda.is_available() == True and exposes HIP streams through the
+    # torch.cuda API, so the first branch already returns the right thing. (An
+    # added `torch.version.hip` branch below these would also be dead code --
+    # unreachable on ROCm because the cuda branch returns first.)
     if torch.cuda.is_available():
         return torch.cuda.stream
 
     if torch.xpu.is_available():
         return torch.xpu.stream
-
-    if torch.version.hip is not None:
-        # ROCm: hipStream_t via torch.hip
-        try:
-            import torch.hip
-            return torch.hip.stream
-        except:
-            pass
 
     return None
 
@@ -36,18 +33,6 @@ def get_current_stream():
                 torch.zeros((1, 1)).to(device, torch.float32)
             stream.synchronize()
             return stream
-        if torch.version.hip is not None:
-            # ROCm: try hip cuda-compatible stream
-            try:
-                import torch.hip
-                device = torch.device("cuda")
-                stream = torch.hip.Stream(device)
-                with torch.hip.stream(stream):
-                    torch.zeros((1, 1)).to(device, torch.float32)
-                stream.synchronize()
-                return stream
-            except:
-                pass
     except:
         return None
 
@@ -68,18 +53,6 @@ def get_new_stream():
                 torch.zeros((1, 1)).to(device, torch.float32)
             stream.synchronize()
             return stream
-        if torch.version.hip is not None:
-            # ROCm: try hip cuda-compatible stream
-            try:
-                import torch.hip
-                device = torch.device("cuda")
-                stream = torch.hip.Stream(device)
-                with torch.hip.stream(stream):
-                    torch.zeros((1, 1)).to(device, torch.float32)
-                stream.synchronize()
-                return stream
-            except:
-                pass
     except:
         return None
 
