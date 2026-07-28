@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-# forge-again launcher (Linux x86_64, AMD Vulkan / ROCm / NVIDIA CUDA / Apple MPS)
-# Auto-detects GPU type, installs matching PyTorch, builds/deployes llama.cpp
-# binaries for the detected backend.
+# forge-again launcher (Linux x86_64, AMD ROCm/Vulkan / NVIDIA CUDA / Apple MPS)
+# Auto-detects the GPU, installs the matching PyTorch build, and compiles the
+# AI assistant's patched llama.cpp for the detected backend on first run.
 #
 # Usage:  ./start.sh [sd|xl|flux]
 # Env:    FORCE_GPU=nvidia|rocm|vulkan|cpu|mps   override auto-detection
+#         FORGE_PORT        UI port         (default: 7860)
+#         FORGE_MODELS_DIR  external models folder (default: ./models)
+#         FORGE_NO_BROWSER  set to skip auto-opening a browser
+#         FORGE_NO_LLM      set to skip the AI assistant build + model download
+#         TORCH_ROCM_INDEX  override the ROCm wheel index (default: rocm7.1)
 # =============================================================================
 set -e
 cd "$(dirname "$(readlink -f "$0")")"
@@ -388,27 +393,28 @@ EXTRA_ARGS=""
 AUTOLAUNCH="--autolaunch"
 [ -n "${FORGE_NO_BROWSER:-}" ]   && AUTOLAUNCH=""
 
-# cuda-malloc is a no-op on ROCm; still safe to pass but we omit it to be
-# honest about what it does.  --skip-torch-cuda-test is needed when the
-# torch wheel is not cuda-enabled (ROCm nightly, PyPI cpu/mps).
+# cuda-malloc is a no-op on ROCm; we omit it there to be honest about what it
+# does. --skip-torch-cuda-test is a store_true flag: it must be passed BARE or
+# not at all -- "--skip-torch-cuda-test=true" makes argparse abort with
+# "ignored explicit argument", which stopped launch.py on every platform.
+# Non-CUDA wheels (cpu/mps/vulkan) can't pass the test, so skip it there.
+# ROCm reports torch.cuda.is_available()==True, but skipping is still correct:
+# a card ROCm can't drive should surface as a clear runtime error, not a
+# bootstrap abort.
 case "$GPU" in
-  nvidia) LAUNCH_FLAGS="--cuda-malloc" ; _skip_cuda_test=false ;;
-  rocm)   LAUNCH_FLAGS=""             ; _skip_cuda_test=true  ;;
-  vulkan) LAUNCH_FLAGS=""             ; _skip_cuda_test=true  ;;
-  mps)    LAUNCH_FLAGS=""             ; _skip_cuda_test=true  ;;
-  cpu)    LAUNCH_FLAGS=""             ; _skip_cuda_test=true  ;;
+  nvidia) LAUNCH_FLAGS="--cuda-malloc" ;;
+  *)      LAUNCH_FLAGS="--skip-torch-cuda-test" ;;
 esac
 
 # ------------------------------------------------------------------- run / restart loop
 while :; do
   CKMODE="$(cat current_mode.txt 2>/dev/null || echo xl)"
   venv/bin/python launch.py \
-    --listen --port 7860 \
+    --listen --port "${FORGE_PORT:-7860}" \
     --api \
     ${LAUNCH_FLAGS:---cuda-malloc} \
     --no-half-vae --disable-xformers \
     --skip-python-version-check \
-    --skip-torch-cuda-test="${_skip_cuda_test:-true}" \
     --ckpt-dir    "${FORGE_MODELS_DIR:-./models}/checkpoints/$CKMODE" \
     --lora-dir    "${FORGE_MODELS_DIR:-./models}/Lora" \
     --vae-dir     "${FORGE_MODELS_DIR:-./models}/VAE" \
