@@ -373,6 +373,32 @@ def forge_main_entry():
     ui_forge_preset.change(preset_apply_and_refresh_checkpoint, inputs=[ui_forge_preset], outputs=[ui_checkpoint, ui_vae], queue=False, show_progress=False)
     ui_forge_preset.change(_on_preset_change_filtered, inputs=[ui_forge_preset], outputs=output_targets, queue=False, show_progress=False)
     ui_forge_preset.change(js="clickLoraRefresh", fn=None, queue=False, show_progress=False)
+
+    # Chroma runs REAL CFG (its guidance embed was removed), so flux mode's
+    # distilled default of 1.0 turns it to mush. When the checkpoint dropdown
+    # lands on a chroma model, bump any distilled-looking CFG (<2) to 4.0; when
+    # leaving chroma for a distilled flux model, drop back to 1.0 ONLY if the
+    # slider still sits at exactly our 4.0 -- a hand-tuned value survives both
+    # directions. Lazy img2img may leave its slider None; wire what exists.
+    CHROMA_CFG = 4.0
+    cfg_targets = [c for c in (ui_txt2img_cfg, ui_img2img_cfg) if c is not None]
+
+    def _chroma_cfg_bump(ckpt_name, *cfgs):
+        if shared.opts.forge_preset != 'flux':
+            return [gr.update() for _ in cfgs] if len(cfgs) > 1 else gr.update()
+        is_chroma = 'chroma' in (ckpt_name or '').lower()
+        out = []
+        for cfg in cfgs:
+            if is_chroma and (cfg or 0) < 2:
+                out.append(gr.update(value=CHROMA_CFG))
+            elif not is_chroma and cfg == CHROMA_CFG:
+                out.append(gr.update(value=1.0))
+            else:
+                out.append(gr.update())
+        return out if len(out) > 1 else out[0]
+
+    if cfg_targets:
+        ui_checkpoint.change(_chroma_cfg_bump, inputs=[ui_checkpoint] + cfg_targets, outputs=cfg_targets, queue=False, show_progress=False)
     Context.root_block.load(_on_preset_change_filtered, inputs=None, outputs=output_targets, queue=False, show_progress=False)
 
     # Keep the Replacer profile file in sync with the launch preset. mode_profile.json

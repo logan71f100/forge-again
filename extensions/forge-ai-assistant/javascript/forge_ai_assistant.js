@@ -2990,8 +2990,15 @@
         // reflows on 250+ controls), so it only runs after the user actually
         // edited something — never on an idle timer. This was a major source
         // of UI jank when it polled every 4s.
+        // Only events the USER caused count (ev.isTrusted): gradio dispatches
+        // synthetic input/change storms during page init and preset application,
+        // which used to mark a fresh, untouched page dirty — its DEFAULT values
+        // then autosaved over the real last session, so Restore brought back a
+        // blank slate instead of the user's work. Synthetic events (scripts,
+        // the restart-watchdog's prompt restore, the AI driver) never arm saves.
         let uiDirty = false;
-        const markUiDirty = () => { uiDirty = true; };
+        let userTouched = false;
+        const markUiDirty = (ev) => { if (ev && ev.isTrusted) { uiDirty = true; userTouched = true; } };
         gradioApp().addEventListener('input', markUiDirty, true);
         gradioApp().addEventListener('change', markUiDirty, true);
         setInterval(() => {
@@ -3008,6 +3015,7 @@
         // seconds (e.g. ControlNet changes right before closing Forge)
         window.addEventListener('beforeunload', () => {
             try {
+                if (!userTouched) return;   // untouched page (fresh load, watchdog reload, headless visit) must never overwrite the last real session
                 captureUiSnapshot(true);
                 if (!Object.keys(uiSnapshots).length) return;   // never clobber a good save with nothing
                 const blob = new Blob(

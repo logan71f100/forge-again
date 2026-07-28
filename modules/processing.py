@@ -1954,10 +1954,20 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
         # img2img tab leaves script arg slots unassigned for headless callers.
         to = self.sd_model.forge_objects.unet.model_options.setdefault('transformer_options', {})
         to.pop('kontext_latents', None)   # clear-first: options dicts can be shared across runs
-        if shared.opts.data.get('forge_kontext_reference_edit', False) and self.init_latent is not None:
+        kontext_mode = shared.opts.data.get('forge_kontext_reference_edit', 'Auto')
+        if isinstance(kontext_mode, bool):   # value from the short-lived checkbox era
+            kontext_mode = 'On' if kontext_mode else 'Auto'
+        if kontext_mode == 'Auto':
+            # A Kontext state dict is structurally identical to flux-dev's, so
+            # the filename is the only practical signal at this layer.
+            ckpt_name = os.path.basename(getattr(getattr(self.sd_model, 'sd_checkpoint_info', None), 'filename', '') or '')
+            kontext_active = 'kontext' in ckpt_name.lower()
+        else:
+            kontext_active = kontext_mode == 'On'
+        if kontext_active and self.init_latent is not None:
             to['kontext_latents'] = [self.init_latent]
             self.extra_generation_params['Kontext reference'] = True
-            print(f'[Kontext] reference latents attached: {tuple(self.init_latent.shape)}')
+            print(f'[Kontext] reference latents attached ({kontext_mode.lower()}): {tuple(self.init_latent.shape)}')
 
         if self.scripts is not None:
             self.scripts.process_before_every_sampling(self,

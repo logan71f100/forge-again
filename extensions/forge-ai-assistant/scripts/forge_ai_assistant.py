@@ -916,6 +916,25 @@ def _profiles_store(p):
 
 
 def _session_save(state):
+    # Keep one generation of backup: a save from a fresh/near-default page must
+    # never be able to DESTROY the previous real session. Only rotate when the
+    # incoming state is not obviously poorer than what it replaces (fewer tabs
+    # or dramatically fewer captured controls == suspicious downgrade; keep the
+    # old file as .prev either way so recovery is always possible).
+    try:
+        if os.path.exists(SESSION_FILE):
+            with open(SESSION_FILE, "r", encoding="utf-8") as f:
+                old = json.load(f)
+            old_tabs = old.get("uiSnapshots") or {}
+            new_tabs = state.get("uiSnapshots") or {}
+            old_n = sum(len(v) for v in old_tabs.values())
+            new_n = sum(len(v) for v in new_tabs.values())
+            if len(old_tabs) > len(new_tabs) or new_n < old_n // 2:
+                # downgrade-looking save: preserve the richer state as .prev
+                with open(SESSION_FILE + ".prev", "w", encoding="utf-8") as f:
+                    json.dump(old, f)
+    except Exception:
+        pass
     tmp = SESSION_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f)
