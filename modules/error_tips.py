@@ -30,6 +30,12 @@ def _arch(dim: int) -> str:
 def _matmul_tip(m: re.Match) -> str:
     # "mat1 and mat2 shapes cannot be multiplied (154x2048 and 768x320)"
     a_in, b_in = int(m.group(2)), int(m.group(3))
+    if (a_in, b_in) == (64, 384):
+        # Flux Fill's img_in expects 384 channels (64 latent + masked-image
+        # conditioning); plain txt2img only supplies the 64.
+        return ("This checkpoint is a Flux Fill (inpainting) model -- it needs an input image and "
+                "a mask, so it works from img2img inpaint or the Replacer tab, not plain txt2img. "
+                "For txt2img, pick a regular (dev/schnell) Flux checkpoint.")
     left, right = _ARCH_BY_DIM.get(a_in), _ARCH_BY_DIM.get(b_in)
     if left and right and left != right:
         return (f"This usually means two different model families got mixed: something in this "
@@ -58,6 +64,11 @@ def _none_image_tip(m: re.Match) -> str:
             "the canvas (re-upload it if the preview looks empty), then try again.")
 
 
+def _no_model_tip(m: re.Match) -> str:
+    return ("No model is loaded -- the previous checkpoint load failed (the earlier error above or "
+            "in the console says why). Fix that or select a different checkpoint, then try again.")
+
+
 # Each entry: (pattern, tip builder, field selector or None).
 # The field selector points at the UI control most likely responsible; the
 # "{tab}" placeholder is resolved client-side to the active tab (txt2img/
@@ -72,6 +83,8 @@ TIPS = [
      None),
     (re.compile(r"'NoneType' object has no attribute 'mode'"), _none_image_tip,
      "#{tab}_image"),
+    (re.compile(r"'NoneType' object has no attribute 'sd_checkpoint_info'"), _no_model_tip,
+     None),
 ]
 
 
