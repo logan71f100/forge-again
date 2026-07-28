@@ -1351,9 +1351,8 @@ def check_ui_regression() -> None:
             # Info used to be a silent no-op until the user had opened img2img
             # once. sendToLazy.js now builds the destination and replays the
             # click. MUST run before anything below opens img2img -- the whole
-            # point is an unbuilt destination. (Known limitation, not covered
-            # here: in a SECOND concurrent browser session the replayed click can
-            # still be lost -- cross-session gradio render-dependency leak.)
+            # point is an unbuilt destination. (The second-concurrent-session
+            # variant is guarded separately at the end of this tier.)
             try:
                 from PIL.PngImagePlugin import PngInfo as _PngInfo
                 from PIL import Image as _Image
@@ -1800,6 +1799,50 @@ def check_ui_regression() -> None:
                            f"search+refresh visible; filter {filtered[0] if filtered else '?'}->{filtered[1] if filtered else '?'} on no-match")
             except Exception as e:
                 record("ui: extra-networks search is visible + filters", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
+            # --- Send-to must also work in a SECOND concurrent session --------
+            # The ScriptRunner paste registries (infotext_fields/paste_field_
+            # names) are process-wide and are APPENDED to by every per-session
+            # img2img rebuild. Before prepare_ui() reset them, a second session's
+            # paste outputs carried the first session's dead component ids and
+            # the whole paste event 500'd (KeyError) -- multi-user send-to
+            # silently delivered nothing. This page's session (above) already
+            # built img2img, so a fresh page here IS the second session.
+            try:
+                from PIL.PngImagePlugin import PngInfo as _PngInfo
+                from PIL import Image as _Image
+                _meta = _PngInfo()
+                _meta.add_text("parameters", "second session probe\nNegative prompt: blur\nSteps: 20, Seed: 7")
+                _png2 = os.path.join(tempfile.gettempdir(), "forge_ui_sendto_probe2.png")
+                _Image.new("RGB", (96, 64), (20, 60, 120)).save(_png2, pnginfo=_meta)
+
+                p2 = browser.new_page(viewport={"width": 1720, "height": 1100})
+                perrs = []
+                p2.on("pageerror", lambda e: perrs.append(str(e)))
+                p2.goto(page.url, wait_until="domcontentloaded", timeout=120000)
+                p2.wait_for_selector("#txt2img_prompt textarea", timeout=120000)
+                p2.wait_for_timeout(2500)
+                p2.click('button[role=tab]:text-is("PNG Info")', timeout=15000)
+                p2.wait_for_timeout(3000)
+                p2.query_selector("#pnginfo_image input[type=file]").set_input_files(_png2)
+                p2.wait_for_timeout(2500)
+                p2.evaluate("() => { const bs = [...document.querySelectorAll('#tab_pnginfo button')];"
+                            " const b = bs.find(x => /send to img2img/i.test(x.textContent)); if (b) b.click(); }")
+                prm2 = None
+                for _ in range(35):
+                    p2.wait_for_timeout(1000)
+                    prm2 = p2.evaluate("() => { const t = document.querySelector('#img2img_prompt textarea'); return t ? t.value : null; }")
+                    if prm2:
+                        break
+                p2.close()
+                if prm2 and "second session probe" in prm2:
+                    record("ui: send-to works in a second session", PASS, "params delivered cross-rebuild")
+                else:
+                    record("ui: send-to works in a second session", FAIL,
+                           f"prompt={prm2!r}; pageerrors={[e[:60] for e in perrs[:3]]}"
+                           " -- stale ScriptRunner paste registries poison the 2nd session")
+            except Exception as e:
+                record("ui: send-to works in a second session", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
 
             browser.close()
 
