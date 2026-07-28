@@ -144,7 +144,19 @@ def load_huggingface_component(guess, component_name, lib_name, cls_name, repo_p
 
             unet_storage_dtype_overwrite = backend.args.dynamic_args.get('forge_unet_storage_dtype')
 
-            if unet_storage_dtype_overwrite is not None:
+            if unet_storage_dtype_overwrite is not None and state_dict_dtype in ['nf4', 'fp4', 'gguf']:
+                # The checkpoint is already a packed-quant format that carries its own storage
+                # quantization (and its own operations class). A "Diffusion in Low Bits" override
+                # (float8/bnb) cannot be applied on top of it -- doing so routes the pre-quantized
+                # tensors down the wrong load path and crashes (e.g. re-wrapping a ParameterGGUF,
+                # 'ParameterGGUF object has no attribute tensor_type'). Ignore the override and
+                # honor the checkpoint's native format.
+                print(f'Ignoring UNet storage type "{unet_storage_dtype_overwrite}": checkpoint is already pre-quantized ({state_dict_dtype}).')
+                storage_dtype = state_dict_dtype
+                print(f'Using pre-quant state dict!')
+                if state_dict_dtype in ['gguf']:
+                    beautiful_print_gguf_state_dict_statics(state_dict)
+            elif unet_storage_dtype_overwrite is not None:
                 storage_dtype = unet_storage_dtype_overwrite
             elif state_dict_dtype in [torch.float8_e4m3fn, torch.float8_e5m2, 'nf4', 'fp4', 'gguf']:
                 print(f'Using Detected UNet Type: {state_dict_dtype}')
