@@ -46,10 +46,19 @@ Pick your platform — each guide has its own setup steps, caveats and recommend
 |---|---|---|---|
 | **Windows** | [docs/install-windows.md](docs/install-windows.md) | prebuilt, works out of the box | ✅ **Verified** |
 | **Docker** (any host + NVIDIA GPU) | [docs/install-docker.md](docs/install-docker.md) | opt-in, built from source in the image | ✅ **Verified** |
-| **Linux** (native) | [docs/install-linux.md](docs/install-linux.md) | opt-in, build from the included patch | ⚠️ **Untested** |
+| **Linux** (native, NVIDIA or **AMD**) | [docs/install-linux.md](docs/install-linux.md) | built from the included patch on first run | ✅ **Verified** (AMD) |
 | **macOS** | [docs/install-macos.md](docs/install-macos.md) | build from patch; hibernate untested on Metal | ⚠️ **Untested** |
 
 "Verified" means it was actually built and run on that platform, not just expected to work.
+
+**AMD GPUs work on Linux.** `start.sh` detects an AMD card and installs the ROCm
+PyTorch build — those wheels bundle their own ROCm runtime, so no system ROCm
+install is needed. Verified end to end on a **Radeon 890M (Strix Point, gfx1150)**
+under Ubuntu 26.04: torch reports `2.13.0+rocm7.1` on `AMD Radeon 890M`, and a
+512×512 SD 1.5 generation completes in ~12 s. No `HSA_OVERRIDE_GFX_VERSION` is
+needed — ROCm 7.1 supports gfx1150 directly. The AI assistant's `llama-server` is
+compiled from source with the Vulkan backend on AMD (ggml-hip would need a full
+system ROCm; ggml-vulkan needs only the Mesa driver you already have).
 
 **Get the code** — [**⬇ Download the latest release**](https://github.com/logan71f100/forge-again/releases/latest), or clone it:
 

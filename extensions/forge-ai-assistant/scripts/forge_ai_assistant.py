@@ -42,7 +42,26 @@ from modules import script_callbacks, shared
 # (…/extensions/forge-ai-assistant/scripts/this_file → up 4).
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 _LLAMA_EXE = "llama-server.exe" if os.name == "nt" else "llama-server"
-DEFAULT_SERVER_BIN = os.path.join(_PROJECT_ROOT, "forge-llm", _LLAMA_EXE)
+
+
+def _default_server_bin():
+    """Locate the llama-server binary.
+
+    Windows ships a prebuilt one at forge-llm/. On Linux/macOS start.sh compiles
+    it per backend into forge-llm/<backend>/, so look there too -- otherwise the
+    freshly built server is invisible and the assistant reports "binary not
+    found" pointing at the bare forge-llm/ path. Ordered by preference: a
+    discrete-GPU backend beats the CPU-ish fallbacks.
+    """
+    root = os.path.join(_PROJECT_ROOT, "forge-llm")
+    for sub in ("", "cuda", "rocm", "vulkan", "metal"):
+        cand = os.path.join(root, sub, _LLAMA_EXE) if sub else os.path.join(root, _LLAMA_EXE)
+        if os.path.isfile(cand):
+            return cand
+    return os.path.join(root, _LLAMA_EXE)   # nothing built yet: report the canonical path
+
+
+DEFAULT_SERVER_BIN = _default_server_bin()
 # follow FORGE_MODELS_DIR (set by the launchers) so the LLM lives beside the SD models
 DEFAULT_MODELS_DIR = os.path.join(os.environ.get("FORGE_MODELS_DIR", os.path.join(_PROJECT_ROOT, "models")), "llm")
 DEFAULT_API_URL = "http://127.0.0.1:5000"
