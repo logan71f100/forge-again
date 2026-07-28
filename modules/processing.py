@@ -834,8 +834,13 @@ def estimate_run_inference_memory(p: StableDiffusionProcessing) -> int:
             width, height = int(width * scale), int(height * scale)
 
     mpx = (width * height * batch) / 1_000_000
+    # flux constants tightened from measured data (2080 Ti, six 1024x1024 runs,
+    # GGUF + SDPA): actual sampling overhead ~600-650 MB at 1.05 Mpx, so
+    # 768 + 1024/Mpx keeps ~3x margin while returning ~1.3 GB to resident
+    # weights vs the first-guess constants. xl/sd remain first-guess pending
+    # the same [Memory] Run peak calibration.
     base_mb, per_mpx_mb = {
-        'flux': (1024, 2048),
+        'flux': (768, 1024),
         'xl': (512, 1536),
         'sd': (384, 1024),
     }.get(getattr(shared.opts, 'forge_preset', 'xl'), (512, 1536))
