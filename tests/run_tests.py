@@ -689,9 +689,34 @@ class ServerSession:
                 if not k.startswith("_")}
         # Live previews and progress polling only add noise to an API-driven run.
         data["live_previews_enable"] = False
-        json.dump(data, open(settings, "w", encoding="utf-8"), indent=4)
 
         models = os.environ.get("FORGE_MODELS_DIR", os.path.join(ROOT, "models"))
+
+        if self.mode == "flux":
+            # Flux checkpoints are transformer-only; the VAE/CLIP/T5 sidecars come
+            # from forge_additional_modules, which set_mode.py writes into the real
+            # config but the test fixture doesn't carry. Without them the load dies
+            # with "You do not have CLIP state dict!". Mirror set_mode's module list
+            # here, and pick a NON-fill checkpoint: fill models take 384-channel
+            # masked-image input and cannot run plain txt2img at all.
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "forge_set_mode", os.path.join(ROOT, "set_mode.py"))
+            sm = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(sm)
+            data["forge_preset"] = "flux"
+            data["forge_additional_modules"] = sm.MODELS["flux"]["mods"]
+            ckpt_dir = os.path.join(models, "checkpoints", "flux")
+            candidates = [f for f in os.listdir(ckpt_dir)
+                          if f.endswith((".safetensors", ".gguf")) and "fill" not in f.lower()] \
+                if os.path.isdir(ckpt_dir) else []
+            if candidates:
+                # smallest first: a q4/q6 GGUF generates in seconds; a full-precision
+                # flux swaps for minutes on consumer VRAM and tests the same paths.
+                candidates.sort(key=lambda f: os.path.getsize(os.path.join(ckpt_dir, f)))
+                data["sd_model_checkpoint"] = candidates[0]
+
+        json.dump(data, open(settings, "w", encoding="utf-8"), indent=4)
         env = dict(os.environ)
         env.update(FORGE_NO_LLM="1", SD_WEBUI_RESTARTING="1", PYTHONUNBUFFERED="1")
 
@@ -823,6 +848,15 @@ def check_gpu_generation() -> None:
             record("gpu: server starts", PASS, f"mode={s.mode}, port={s.port}")
             base = {"steps": 6, "cfg_scale": 5, "sampler_name": "Euler",
                     "prompt": "a red apple on a wooden table", "seed": 12345}
+            # Flux is guidance-distilled: true CFG must stay at 1 and the
+            # guidance goes through distilled_cfg_scale. cfg 5 on flux
+            # produces garbage/black frames, failing the blank checks for
+            # harness reasons rather than product ones. Applied to every
+            # payload in this tier, including the ones not built from `base`.
+            flux_over = {"cfg_scale": 1.0, "distilled_cfg_scale": 3.5,
+                         "scheduler": "Simple"} if s.mode == "flux" else {}
+            if flux_over:
+                base.update(flux_over, steps=8)
 
             # --- txt2img: right size, and actually contains an image ---------
             try:
@@ -909,6 +943,7 @@ def check_gpu_generation() -> None:
                     "denoising_strength": 0.95, "inpainting_fill": 1,
                     "inpaint_full_res": False, "mask_blur": 4,
                     "width": src_img.size[0], "height": src_img.size[1], "seed": 4242,
+                    **flux_over,
                 })
                 out_img = _decode((r5.get("images") or [""])[0]).convert("RGB")
 
@@ -945,7 +980,7 @@ def check_gpu_generation() -> None:
                 r4 = s.post("/sdapi/v1/img2img", {
                     "init_images": [first], "prompt": "a green apple on a wooden table",
                     "steps": 6, "cfg_scale": 5, "denoising_strength": 0.55,
-                    "width": 768, "height": 768, "seed": 999})
+                    "width": 768, "height": 768, "seed": 999, **flux_over})
                 out = (r4.get("images") or [""])[0]
                 im = _decode(out)
                 if im.size != (768, 768):
