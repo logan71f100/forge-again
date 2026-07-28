@@ -60,15 +60,15 @@ def cuda_malloc_supported():
 
 
 def try_cuda_malloc():
-    # ROCm: skip cudaMallocAsync - ROCm uses hipMallocAsync handled by the runtime.
-    if hasattr(torch.version, 'hip') and torch.version.hip:
-        print('[cuda_malloc] SKIPPED: ROCm detected, using hip malloc.')
-        return
-
     do_cuda_malloc = False
 
     try:
         version = ""
+        is_rocm = False
+        # NOTE: this module must NOT `import torch` -- it runs to set
+        # PYTORCH_CUDA_ALLOC_CONF *before* torch is first imported, and importing
+        # it here would defeat that. Read torch's version.py directly instead,
+        # which also tells us whether this is a ROCm build (version.hip is set).
         torch_spec = importlib.util.find_spec("torch")
         for folder in torch_spec.submodule_search_locations:
             ver_file = os.path.join(folder, "version.py")
@@ -77,6 +77,12 @@ def try_cuda_malloc():
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
                 version = module.__version__
+                is_rocm = bool(getattr(module, "hip", None))
+        if is_rocm:
+            # cudaMallocAsync is a CUDA-only knob; ROCm handles allocation via
+            # hipMallocAsync in its own runtime.
+            print('[cuda_malloc] SKIPPED: ROCm build detected, using hip malloc.')
+            return
         if int(version[0]) >= 2:
             do_cuda_malloc = cuda_malloc_supported()
     except:
