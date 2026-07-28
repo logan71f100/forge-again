@@ -218,7 +218,10 @@ input[type="checkbox"].input-accordion-checkbox{
 
 .block.token-counter{
     position: absolute;
-    display: inline-block;
+    /* counters are created visible=True (gradio 6 does not mount visible=False)
+       and start CSS-hidden; toggleTokenCountingVisibility in token-counters.js
+       shows them per the disable_token_counters option */
+    display: none;
     right: 1em;
     min-width: 0 !important;
     width: auto;
