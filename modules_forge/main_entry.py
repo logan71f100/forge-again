@@ -376,33 +376,60 @@ def forge_main_entry():
 
     # Chroma runs REAL CFG (its guidance embed was removed), so flux mode's
     # distilled default of 1.0 turns it to mush. When the checkpoint dropdown
-    # lands on a chroma model, bump any distilled-looking CFG (<2) to 4.0; when
-    # leaving chroma for a distilled flux model, drop back to 1.0 ONLY if the
-    # slider still sits at exactly our 4.0 -- a hand-tuned value survives both
-    # directions. Lazy img2img may leave its slider None; wire what exists.
+    # lands on a chroma model, apply chroma-friendly settings; when leaving for
+    # a distilled flux model, revert each one ONLY if it still sits at exactly
+    # our chroma value -- a hand-tuned value survives both directions.
+    #   CFG      <2  -> 4.0        (real CFG; 1.0 is pure blur)   back to 1.0
+    #   scheduler Simple/Automatic -> Beta (converges better)     back to Simple
+    #   steps    <26 -> 26         (chroma needs more than dev)   back to 20
+    # Lazy img2img may leave its components None; wire what exists.
     CHROMA_CFG = 4.0
-    cfg_targets = [c for c in (ui_txt2img_cfg, ui_img2img_cfg) if c is not None]
+    CHROMA_SCHEDULER = 'Beta'
+    CHROMA_STEPS = 26
+    ui_txt2img_steps = get_a1111_ui_component('txt2img', 'Steps')
+    ui_img2img_steps = get_a1111_ui_component('img2img', 'Steps')
+    chroma_targets = [(c, kind) for c, kind in (
+        (ui_txt2img_cfg, 'cfg'), (ui_img2img_cfg, 'cfg'),
+        (ui_txt2img_scheduler, 'scheduler'), (ui_img2img_scheduler, 'scheduler'),
+        (ui_txt2img_steps, 'steps'), (ui_img2img_steps, 'steps'),
+    ) if c is not None]
 
-    def _chroma_cfg_bump(ckpt_name, *cfgs):
+    def _chroma_settings_bump(ckpt_name, *vals):
         if shared.opts.forge_preset != 'flux':
-            return [gr.update() for _ in cfgs] if len(cfgs) > 1 else gr.update()
+            return [gr.update() for _ in vals] if len(vals) > 1 else gr.update()
         is_chroma = 'chroma' in (ckpt_name or '').lower()
         out = []
-        for cfg in cfgs:
-            if is_chroma and (cfg or 0) < 2:
-                out.append(gr.update(value=CHROMA_CFG))
-            elif not is_chroma and cfg == CHROMA_CFG:
-                out.append(gr.update(value=1.0))
-            else:
-                out.append(gr.update())
+        for (_, kind), val in zip(chroma_targets, vals):
+            if kind == 'cfg':
+                if is_chroma and (val or 0) < 2:
+                    out.append(gr.update(value=CHROMA_CFG))
+                elif not is_chroma and val == CHROMA_CFG:
+                    out.append(gr.update(value=1.0))
+                else:
+                    out.append(gr.update())
+            elif kind == 'scheduler':
+                if is_chroma and val in ('Automatic', 'Simple'):
+                    out.append(gr.update(value=CHROMA_SCHEDULER))
+                elif not is_chroma and val == CHROMA_SCHEDULER:
+                    out.append(gr.update(value='Simple'))
+                else:
+                    out.append(gr.update())
+            else:  # steps
+                if is_chroma and (val or 0) < CHROMA_STEPS:
+                    out.append(gr.update(value=CHROMA_STEPS))
+                elif not is_chroma and val == CHROMA_STEPS:
+                    out.append(gr.update(value=20))
+                else:
+                    out.append(gr.update())
         return out if len(out) > 1 else out[0]
 
-    if cfg_targets:
-        ui_checkpoint.change(_chroma_cfg_bump, inputs=[ui_checkpoint] + cfg_targets, outputs=cfg_targets, queue=False, show_progress=False)
+    if chroma_targets:
+        chroma_comps = [c for c, _ in chroma_targets]
+        ui_checkpoint.change(_chroma_settings_bump, inputs=[ui_checkpoint] + chroma_comps, outputs=chroma_comps, queue=False, show_progress=False)
         # A chroma checkpoint that is ALREADY selected when the page loads never
         # fires .change -- bump on page load too, or a fresh session starts
         # generating chroma at the distilled cfg 1.0 (pure blur).
-        Context.root_block.load(_chroma_cfg_bump, inputs=[ui_checkpoint] + cfg_targets, outputs=cfg_targets, queue=False, show_progress=False)
+        Context.root_block.load(_chroma_settings_bump, inputs=[ui_checkpoint] + chroma_comps, outputs=chroma_comps, queue=False, show_progress=False)
     Context.root_block.load(_on_preset_change_filtered, inputs=None, outputs=output_targets, queue=False, show_progress=False)
 
     # Keep the Replacer profile file in sync with the launch preset. mode_profile.json
