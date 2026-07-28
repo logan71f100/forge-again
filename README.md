@@ -76,6 +76,14 @@ You still supply your own Stable Diffusion checkpoints (see the layout below) �
 
 Model layout: checkpoints go in `models\checkpoints\sd|xl|flux\` (one folder per mode — the mode switcher scans the matching folder); LoRAs in `models\Lora`, VAEs in `models\VAE`, text encoders in `models\text_encoder`, upscalers in `models\ESRGAN`. Flux mode expects `ae.safetensors` in `models\VAE` and `clip_l.safetensors` + `t5xxl_fp8_e4m3fn.safetensors` in `models\text_encoder`. SAM/GroundingDINO detection models go in `extensions\sd-webui-segment-anything\models\sam` and `...\grounding-dino`.
 
+> **Flux VRAM note (11 GB cards).** Flux weights load whole, so the checkpoint has
+> to fit alongside the ~1 GB inference reserve. A q4 flux checkpoint generates
+> 512×512 in ~23 s on an RTX 2080 Ti (verified). A ~9.4 GB Q6_K checkpoint leaves
+> too little headroom and stalls with a `[Low GPU VRAM Warning]` — lower **GPU
+> Weights** at the top of the page, or use a smaller quant. Note the `fill`
+> checkpoints are *inpainting* models: use them from img2img/inpaint or Replacer,
+> not plain txt2img.
+
 ## Launch arguments
 
 The launchers pass these by default:
