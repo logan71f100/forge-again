@@ -12,6 +12,9 @@ cd /d "%~dp0"
 
 if "%FORGE_MODELS_DIR%"=="" set "FORGE_MODELS_DIR=%~dp0models"
 if "%FORGE_PORT%"=="" set "FORGE_PORT=7860"
+rem HuggingFace token (optional): put a read token in .hf_token next to this
+rem script to lift anonymous rate limits on model downloads. Gitignored.
+if "%HF_TOKEN%"=="" if exist "%~dp0.hf_token" set /p HF_TOKEN=<"%~dp0.hf_token"
 set "PYDIR=%~dp0python"
 set "VENV=%~dp0venv"
 set "STAMP=%VENV%\.deps_installed"

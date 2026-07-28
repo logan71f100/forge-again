@@ -15,6 +15,14 @@
 set -e
 cd "$(dirname "$(readlink -f "$0")")"
 
+# HuggingFace token (optional): a read token in .hf_token lifts anonymous
+# rate limits on model downloads. Gitignored; env var wins if already set.
+if [ -z "${HF_TOKEN:-}" ] && [ -s .hf_token ]; then
+  HF_TOKEN="$(tr -d ' 
+' < .hf_token)"
+  export HF_TOKEN
+fi
+
 # ------------------------------------------------------------------- helpers
 fail() {
   echo
