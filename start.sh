@@ -379,7 +379,21 @@ if [ ! -f venv/.deps_installed ] || [ -z "$REQHASH" ] || ! grep -qx "$REQHASH" v
   esac
 
   echo "[bootstrap] installing requirements ..."
-  venv/bin/python -m pip install --no-build-isolation -r requirements_versions.txt || fail
+  # requirements_versions.txt pins the CUDA build explicitly (torch==2.13.0+cu126
+  # via the cu126 index). On any non-NVIDIA box that pin does NOT match the torch
+  # we just installed -- a +rocm7.1 or +cpu wheel is a different local version --
+  # so pip would happily REPLACE the working torch with the CUDA one and Forge
+  # would then die at startup with "Found no NVIDIA driver". Strip those three
+  # lines for non-NVIDIA; everything else in the file still applies.
+  REQ_INSTALL=requirements_versions.txt
+  if [ "$GPU" != "nvidia" ]; then
+    REQ_INSTALL="$(mktemp)"
+    grep -vE '^(torch==|torchvision==|--extra-index-url[[:space:]]+https://download\.pytorch\.org/whl/cu)' \
+      requirements_versions.txt > "$REQ_INSTALL"
+    echo "[bootstrap] (using $GPU torch; CUDA torch pins filtered out of requirements)"
+  fi
+  venv/bin/python -m pip install --no-build-isolation -r "$REQ_INSTALL" || fail
+  [ "$REQ_INSTALL" = requirements_versions.txt ] || rm -f "$REQ_INSTALL"
   echo "$REQHASH" > venv/.deps_installed
   echo "[bootstrap] environment ready."
 fi
