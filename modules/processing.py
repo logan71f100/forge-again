@@ -902,8 +902,23 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
         # backwards compatibility, fix sampler and scheduler if invalid
         sd_samplers.fix_p_invalid_sampler_and_scheduler(p)
 
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
         with profiling.Profiler():
             res = process_images_inner(p)
+
+        # Feedback for tuning the reserve estimate: how much VRAM this run
+        # ACTUALLY peaked at vs what was budgeted. If peak stays well under
+        # total across runs, the reserve constants can be tightened (more
+        # weights resident -> faster steps).
+        if torch.cuda.is_available():
+            peak_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+            total_mb = memory_management.total_vram
+            floor_mb = memory_management.minimum_inference_memory() / (1024 * 1024)
+            print(f'[Memory] Run peak VRAM: {peak_mb:.0f} MB of {total_mb:.0f} MB '
+                  f'(inference reserve was {floor_mb:.0f} MB; unused headroom {max(total_mb - peak_mb, 0):.0f} MB).')
 
     finally:
         # restore original options
