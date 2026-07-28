@@ -589,10 +589,18 @@ class LoadedModel:
 
 current_inference_memory = 1024 * 1024 * 1024
 
+# Per-run floor (bytes), set by modules/processing before each generation from
+# the run's actual resolution/batch/architecture. The user's GPU Weights slider
+# is a fixed number that cannot know the next run's size; when a run needs more
+# working memory than the slider reserves, the sampler either OOMs or falls off
+# the driver-paging cliff (10-40x slower). The effective reserve is therefore
+# max(slider, per-run estimate).
+dynamic_run_reserve = 0
+
 
 def minimum_inference_memory():
-    global current_inference_memory
-    return current_inference_memory
+    global current_inference_memory, dynamic_run_reserve
+    return max(current_inference_memory, dynamic_run_reserve)
 
 
 def unload_model_clones(model):

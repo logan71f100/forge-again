@@ -14,7 +14,7 @@ FLUX_MODS = [
 MODELS = {
     "sd":   {"ckpt": "epicrealism_pureEvolutionV5.safetensors",    "mods": [],        "W": 512,  "H": 512,  "cfg": 7.0, "dcfg": 3.5, "denoise": 0.5,  "hires_denoise": 0.4,  "steps": 28, "sampler": "DPM++ 2M",     "scheduler": "Karras", "infmem": 1025, "udtype": ""},
     "xl":   {"ckpt": "epicrealismXL_vxviiCrystalclear.safetensors", "mods": [],        "W": 1024, "H": 1024, "cfg": 6.0, "dcfg": 3.5, "denoise": 0.7,  "hires_denoise": 0.35, "steps": 30, "sampler": "DPM++ 2M SDE", "scheduler": "Karras", "infmem": 1025, "udtype": ""},
-    "flux": {"ckpt": "fluxunchained-fill-full-Q6_K.gguf",           "mods": FLUX_MODS, "W": 1024, "H": 1024, "cfg": 1.0, "dcfg": 3.5, "denoise": 1.0,  "hires_denoise": 0.3,  "steps": 25, "sampler": "Euler",        "scheduler": "Simple", "infmem": 1025, "udtype": "Automatic (fp16 LoRA)"},
+    "flux": {"ckpt": "fluxunchained-fill-full-Q6_K.gguf",           "mods": FLUX_MODS, "W": 1024, "H": 1024, "cfg": 1.0, "dcfg": 3.5, "denoise": 1.0,  "hires_denoise": 0.3,  "steps": 25, "sampler": "Euler",        "scheduler": "Simple", "infmem": 3072, "udtype": "Automatic (fp16 LoRA)"},
 }
 # Replacer optimized profile (read at UI build by the patched make_advanced_options.py / inpaint.py)
 REPLACER = {
@@ -48,6 +48,39 @@ EXAMPLES = {
     },
 }
 
+def _vram_mb():
+    """Total VRAM of GPU 0 in MB via nvidia-smi, or None if unknowable.
+
+    set_mode runs before torch exists (start scripts call it pre-venv), so the
+    driver tool is the only cheap probe. AMD/CPU setups return None and keep
+    the table value -- the in-app mode switch re-clamps with torch's number.
+    """
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10)
+        if out.returncode == 0:
+            return int(out.stdout.strip().splitlines()[0])
+    except Exception:
+        pass
+    return None
+
+
+def _scaled_infmem(table_mb, vram_mb):
+    """Clamp a profile's inference reserve to the actual card.
+
+    The reserve is an absolute working-memory need (it tracks resolution, not
+    card size -- flux at 1024x1024 wants ~3 GB on ANY GPU), so big cards keep
+    the table value. Small cards can't give up half their VRAM to reserve, so
+    cap at half the card; keep a 512 MB floor so the cap itself can't starve
+    the sampler into the driver-paging cliff.
+    """
+    if not vram_mb:
+        return table_mb
+    return max(min(table_mb, vram_mb // 2), min(512, table_mb))
+
+
 def _hires_upscaler():
     """Best available hires-fix upscaler: the user's 4x-UltraSharp if installed,
     else R-ESRGAN 4x+ (bundled/auto-downloaded), never Latent."""
@@ -71,8 +104,12 @@ def write_mode_files(mode, here=None):
         mode = "xl"
     here = here or HERE
 
-    m = MODELS[mode]
+    m = dict(MODELS[mode])
     ex = dict(EXAMPLES[mode])
+
+    # scale the inference reserve to this machine's card (see _scaled_infmem);
+    # the returned m carries the clamped value so in-process callers agree.
+    m["infmem"] = _scaled_infmem(m["infmem"], _vram_mb())
 
     # 1) config.json -> checkpoint + modules + memory + per-mode Replacer example chips
     cp = os.path.join(here, "config.json")
@@ -91,7 +128,7 @@ def write_mode_files(mode, here=None):
     c["sd_model_checkpoint"] = m["ckpt"]
     c["forge_additional_modules"] = m["mods"]
     c["forge_preset"] = mode
-    c["forge_inference_memory"] = m["infmem"]   # GPU Weights = total - this (1025 -> ~10239)
+    c["forge_inference_memory"] = m["infmem"]   # GPU Weights = total - this; reserve pre-scaled to the card
     c["forge_async_loading"] = "Queue"
     c["forge_pin_shared_memory"] = "CPU"
     c["forge_unet_storage_dtype"] = m["udtype"]

@@ -427,7 +427,9 @@ def _apply_mode_inplace(mode):
 
         # live opts (the config.json write above does not touch the running session)
         shared.opts.set('forge_preset', mode)
-        shared.opts.set('forge_inference_memory', m['infmem'])
+        # re-clamp the profile's inference reserve against torch's VRAM number:
+        # write_mode_files scales via nvidia-smi, which doesn't exist on AMD/CPU.
+        shared.opts.set('forge_inference_memory', sm._scaled_infmem(m['infmem'], int(total_vram)))
         shared.opts.set('forge_async_loading', 'Queue')
         shared.opts.set('forge_pin_shared_memory', 'CPU')
         shared.opts.set('forge_unet_storage_dtype', m['udtype'])

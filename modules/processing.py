@@ -811,6 +811,39 @@ def create_infotext(p, all_prompts, all_seeds, all_subseeds, comments=None, iter
 
 need_global_unload = False
 
+def estimate_run_inference_memory(p: StableDiffusionProcessing) -> int:
+    """Working-memory (MB) this run will need for activations, per its ACTUAL
+    resolution/batch/architecture. The GPU Weights slider is a fixed reserve
+    that can't know the next run's size; this estimate becomes a per-run floor
+    (memory_management.dynamic_run_reserve) so an undersized slider degrades to
+    a bit more weight-swapping instead of OOM or the driver-paging cliff.
+
+    Deliberately a coarse over-estimate (linear in megapixels, calibrated on
+    fp16 + SDPA): flux at 1024x1024 lands ~3.1 GB, SDXL ~2.1 GB, SD1.5 at
+    512x512 ~0.65 GB. Capped at 60% of VRAM so small cards keep loading weights.
+    """
+    width = getattr(p, 'width', None) or 1024
+    height = getattr(p, 'height', None) or 1024
+    batch = getattr(p, 'batch_size', None) or 1
+    if getattr(p, 'enable_hr', False):
+        hr_x, hr_y = getattr(p, 'hr_resize_x', 0), getattr(p, 'hr_resize_y', 0)
+        if hr_x and hr_y:
+            width, height = hr_x, hr_y
+        else:
+            scale = getattr(p, 'hr_scale', None) or 2.0
+            width, height = int(width * scale), int(height * scale)
+
+    mpx = (width * height * batch) / 1_000_000
+    base_mb, per_mpx_mb = {
+        'flux': (1024, 2048),
+        'xl': (512, 1536),
+        'sd': (384, 1024),
+    }.get(getattr(shared.opts, 'forge_preset', 'xl'), (512, 1536))
+
+    estimate = base_mb + per_mpx_mb * mpx
+    return int(min(estimate, memory_management.total_vram * 0.6))
+
+
 def manage_model_and_prompt_cache(p: StableDiffusionProcessing):
     global need_global_unload
 
@@ -848,6 +881,16 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
 
         # apply any options overrides
         set_config(p.override_settings, is_api=True, run_callbacks=False, save_config=False)
+
+        # per-run inference-memory floor: must be set BEFORE the model (re)load
+        # below, because weight placement (GPU vs CPU-swap) is decided against
+        # minimum_inference_memory() at load time.
+        est_mb = estimate_run_inference_memory(p)
+        memory_management.dynamic_run_reserve = est_mb * 1024 * 1024
+        user_mb = memory_management.current_inference_memory / (1024 * 1024)
+        if est_mb > user_mb:
+            print(f'[Memory] Raising inference reserve to {est_mb} MB for this run '
+                  f'({p.width}x{p.height}, batch {p.batch_size}) -- the GPU Weights slider reserves only {user_mb:.0f} MB.')
 
         # load/reload model and manage prompt cache as needed
         if getattr(p, 'txt2img_upscale', False):

@@ -5,7 +5,7 @@
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
 ![Gradio 6.20](https://img.shields.io/badge/gradio-6.20-blue.svg)
 
-A modernized fork of [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge), ported to the current Python/Gradio/HF ecosystem and packaged to be deployable from a single script.
+A modernized fork of [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge), ported to the current Python/Gradio/HF ecosystem and packaged to be deployable from a single script. Like the original Forge, this project targets **lower-end, VRAM-constrained hardware**: memory management is tuned so that big models (including Flux) run well on consumer cards — quantized GGUF checkpoints, automatic CPU-swap for weights that don't fit, hardware-aware low-bits storage, and a per-run inference reserve that adapts to your card and resolution instead of assuming a datacenter GPU.
 
 ## Screenshots
 
