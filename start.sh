@@ -333,6 +333,26 @@ fi
 
 # Stamp tracks requirements_versions.txt hash so deps get re-installed on updates.
 REQHASH="$(venv/bin/python -c "import hashlib;print(hashlib.sha256(open('requirements_versions.txt','rb').read()).hexdigest()[:16])" 2>/dev/null || true)"
+# Which requirements file the installs use. requirements_versions.txt pins the
+# CUDA build (torch==2.13.0+cu126 via the cu126 index) and "+cu126" is a
+# DIFFERENT local version from "+rocm7.1"/"+cpu" -- so on a non-NVIDIA box that
+# pin is never satisfied and pip replaces the working torch with the CUDA one.
+# Forge then dies with "Found no NVIDIA driver" on a machine that has no NVIDIA
+# hardware at all. Generate a filtered copy at a STABLE path and hand it to both
+# installers: ours below, and launch.py's own requirements check (which re-runs
+# this and would otherwise undo it) via REQS_FILE.
+REQ_INSTALL=requirements_versions.txt
+if [ "$GPU" != "nvidia" ]; then
+  REQ_INSTALL="$PWD/venv/requirements-platform.txt"
+  mkdir -p venv
+  grep -vE '^(torch==|torchvision==|--extra-index-url[[:space:]]+https://download\.pytorch\.org/whl/cu)' \
+    requirements_versions.txt > "$REQ_INSTALL"
+  export REQS_FILE="$REQ_INSTALL"
+fi
+# Tell launch.py which GPU we picked. Without this its prepare_environment()
+# falls back to the CUDA torch_command and reinstalls the wrong wheel.
+export FORGE_GPU="$GPU"
+
 if [ ! -f venv/.deps_installed ] || [ -z "$REQHASH" ] || ! grep -qx "$REQHASH" venv/.deps_installed 2>/dev/null; then
   [ -f venv/.deps_installed ] && echo "[bootstrap] requirements changed since last install; updating ..."
   echo "[bootstrap] upgrading pip ..."
@@ -385,15 +405,7 @@ if [ ! -f venv/.deps_installed ] || [ -z "$REQHASH" ] || ! grep -qx "$REQHASH" v
   # so pip would happily REPLACE the working torch with the CUDA one and Forge
   # would then die at startup with "Found no NVIDIA driver". Strip those three
   # lines for non-NVIDIA; everything else in the file still applies.
-  REQ_INSTALL=requirements_versions.txt
-  if [ "$GPU" != "nvidia" ]; then
-    REQ_INSTALL="$(mktemp)"
-    grep -vE '^(torch==|torchvision==|--extra-index-url[[:space:]]+https://download\.pytorch\.org/whl/cu)' \
-      requirements_versions.txt > "$REQ_INSTALL"
-    echo "[bootstrap] (using $GPU torch; CUDA torch pins filtered out of requirements)"
-  fi
   venv/bin/python -m pip install --no-build-isolation -r "$REQ_INSTALL" || fail
-  [ "$REQ_INSTALL" = requirements_versions.txt ] || rm -f "$REQ_INSTALL"
   echo "$REQHASH" > venv/.deps_installed
   echo "[bootstrap] environment ready."
 fi
