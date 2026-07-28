@@ -399,6 +399,10 @@ def forge_main_entry():
 
     if cfg_targets:
         ui_checkpoint.change(_chroma_cfg_bump, inputs=[ui_checkpoint] + cfg_targets, outputs=cfg_targets, queue=False, show_progress=False)
+        # A chroma checkpoint that is ALREADY selected when the page loads never
+        # fires .change -- bump on page load too, or a fresh session starts
+        # generating chroma at the distilled cfg 1.0 (pure blur).
+        Context.root_block.load(_chroma_cfg_bump, inputs=[ui_checkpoint] + cfg_targets, outputs=cfg_targets, queue=False, show_progress=False)
     Context.root_block.load(_on_preset_change_filtered, inputs=None, outputs=output_targets, queue=False, show_progress=False)
 
     # Keep the Replacer profile file in sync with the launch preset. mode_profile.json
