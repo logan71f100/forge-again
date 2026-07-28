@@ -30,12 +30,12 @@ Everything upstream Forge / A1111 does — txt2img, img2img, inpainting/outpaint
 - **Per-mode UI system** (`sd` / `xl` / `flux`): one click switches checkpoint, VAE/text-encoder modules, UI defaults, and prompt presets — **in place, without restarting** the server.
 - **Lazy-built tabs** for faster startup and lighter pages.
 - **Included extensions** (see credits): Replacer (with a gradio-6 UI rework, per-mode prompt-chip presets editable in Settings, batch modes) and Segment Anything (transformers-5 compatible).
-- **AI assistant extension**: a chat panel that can read and drive the whole UI (set any control, run generations, judge results) through a local vision LLM served by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`. **Works out of the box**: a patched `llama-server` build (Windows/CUDA, with the `/sleep` + `/wake` endpoints that let the LLM free its VRAM while Forge generates) is bundled in `forge-llm/`, and the vision model (Qwen3-VL-30B, ~18 GB) **downloads automatically on first launch** to `models/llm/`. Set `FORGE_NO_LLM=1` before launching to skip that download if you don't want the assistant. Everything — provider, model, task guidance, all paths — is configurable under Settings → AI Assistant; you can point it at a different GGUF, your own `llama-server`, or the Claude API instead. On Linux/macOS the bundled binary won't run (it's a Windows CUDA build) — the **source patch and build instructions are in [`forge-llm/patches/`](forge-llm/patches)**, so you can build the same `/sleep`+`/wake` server for your platform (or audit what the bundled binary actually does) and point Settings at it; or skip the assistant entirely.
+- **AI assistant extension**: a chat panel that can read and drive the whole UI (set any control, run generations, judge results) through a local vision LLM served by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`. **Works out of the box**: a patched `llama-server` build (Windows/CUDA, with the `/sleep` + `/wake` endpoints that let the LLM free its VRAM while Forge generates) is bundled in `forge-llm/`, and the vision model (Qwen3-VL-30B, ~18 GB) **downloads automatically on first launch** to `models/llm/`. Set `FORGE_NO_LLM=1` before launching to skip that download if you don't want the assistant. Everything — provider, model, task guidance, all paths — is configurable under Settings → AI Assistant; you can point it at a different GGUF, your own `llama-server`, or the Claude API instead. On Linux/macOS the launcher **builds the patched server automatically on first run** (needs `git`, `cmake` and a C compiler; skipped gracefully if absent) — CUDA on NVIDIA, Vulkan on AMD, Metal on macOS. Verified on an AMD iGPU: the Vulkan build serves completions and the `/sleep`+`/wake` hibernate cycle preserves the KV cache. The **source patch and build instructions remain in [`forge-llm/patches/`](forge-llm/patches)** if you'd rather build manually or audit what the bundled Windows binary does.
 
 ## Requirements
 
 - **Windows 10/11** (tested — this is the development platform), **Linux x86_64**, or **macOS** (best-effort, untested). Each has its own single self-contained launcher; the bootstrap uses `curl` and `tar`, built into Windows 10+ and standard on Linux/macOS.
-- **NVIDIA GPU** on Windows/Linux — dependencies install PyTorch CUDA 12.6 wheels. Developed and tested on an **RTX 2080 Ti (11 GB)**; everything (including flux and the AI assistant's 30B model) runs on 11 GB via offloading and VRAM-hibernate, just slower — more VRAM helps. macOS uses PyTorch's MPS backend (untested).
+- **NVIDIA or AMD GPU**. NVIDIA (Windows/Linux) installs the PyTorch CUDA 12.6 wheels; AMD (Linux) is auto-detected and installs the ROCm 7.1 wheels — no system ROCm needed, the wheels bundle their runtime. Developed and verified on 11 GB-class NVIDIA hardware and on an AMD Strix Point iGPU. Everything (including flux and the AI assistant's 30B model) runs on 11 GB via offloading and VRAM-hibernate, just slower — more VRAM helps. macOS uses PyTorch's MPS backend (untested).
 - Disk: ~12 GB for Python + dependencies, plus your Stable Diffusion checkpoints. The AI assistant downloads its ~18 GB vision model on first launch (skip with `FORGE_NO_LLM=1`); the bundled `llama-server` adds only ~75 MB (its CUDA math libs come from the PyTorch install). Point the assistant at a smaller GGUF in Settings for faster replies on limited VRAM.
 
 ## Quick start
@@ -53,12 +53,17 @@ Pick your platform — each guide has its own setup steps, caveats and recommend
 
 **AMD GPUs work on Linux.** `start.sh` detects an AMD card and installs the ROCm
 PyTorch build — those wheels bundle their own ROCm runtime, so no system ROCm
-install is needed. Verified end to end on a **Radeon 890M (Strix Point, gfx1150)**
-under Ubuntu 26.04: torch reports `2.13.0+rocm7.1` on `AMD Radeon 890M`, and a
+install is needed. Verified end to end on a **Strix Point iGPU (gfx1150)** under
+Ubuntu 26.04: torch reports `2.13.0+rocm7.1` with the GPU as its device, and a
 512×512 SD 1.5 generation completes in ~12 s. No `HSA_OVERRIDE_GFX_VERSION` is
 needed — ROCm 7.1 supports gfx1150 directly. The AI assistant's `llama-server` is
 compiled from source with the Vulkan backend on AMD (ggml-hip would need a full
-system ROCm; ggml-vulkan needs only the Mesa driver you already have).
+system ROCm; ggml-vulkan needs only the Mesa driver you already have) — also
+verified on the same iGPU: completions serve, and the `/sleep`+`/wake` hibernate cycle
+preserves the KV cache (`cached_tokens` present on the post-wake request). One
+honest note: how much memory `/sleep` actually frees on an iGPU (512 MB dedicated
+VRAM + shared GTT) is unmeasured — the mechanism works; the savings figure was
+measured on a discrete card.
 
 **Get the code** — [**⬇ Download the latest release**](https://github.com/logan71f100/forge-again/releases/latest), or clone it:
 
@@ -87,7 +92,7 @@ Model layout: checkpoints go in `models\checkpoints\sd|xl|flux\` (one folder per
 
 > **Flux VRAM note (11 GB cards).** Flux weights load whole, so the checkpoint has
 > to fit alongside the ~1 GB inference reserve. A q4 flux checkpoint generates
-> 512×512 in ~23 s on an RTX 2080 Ti (verified). A ~9.4 GB Q6_K checkpoint leaves
+> 512×512 in ~23 s on an 11 GB card (verified). A ~9.4 GB Q6_K checkpoint leaves
 > too little headroom and stalls with a `[Low GPU VRAM Warning]` — lower **GPU
 > Weights** at the top of the page, or use a smaller quant. Note the `fill`
 > checkpoints are *inpainting* models: use them from img2img/inpaint or Replacer,

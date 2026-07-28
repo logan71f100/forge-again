@@ -5,7 +5,7 @@ Python 3.12, torch 2.13+cu126 and every dependency, so the container starts in
 about 30 seconds instead of bootstrapping ~12 GB on first run.
 
 Nothing about the image is host-specific — if `docker run --gpus all` works on your
-machine, this works. Verified end to end on an RTX 2080 Ti (11 GB) at **v1.5**: the image
+machine, this works. Verified end to end on an 11 GB NVIDIA card at **v1.5**: the image
 builds (~8 minutes, 12.2 GB), `docker compose up -d` brings it up healthy in about 15
 seconds, the GPU is visible inside the container, and txt2img generation produces images.
 

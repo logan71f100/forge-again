@@ -13,12 +13,17 @@ If you want the path most likely to just work, use Docker.
 ## Requirements
 
 - x86_64 Linux
-- An **NVIDIA GPU** (dependencies install CUDA 12.6 wheels) and a current driver
-- `curl` and `tar` (standard everywhere)
+- An **NVIDIA GPU** (installs the CUDA 12.6 torch wheels) **or an AMD GPU**
+  (auto-detected; installs the ROCm 7.1 torch wheels). `FORCE_GPU=nvidia|rocm|vulkan|cpu`
+  overrides detection.
+- `curl` and `tar` (standard everywhere); for the AI assistant's on-first-run
+  build also `git`, `cmake` and a C compiler (skipped gracefully if absent)
 - ~12 GB of disk for Python and dependencies, plus your models
 
-No system Python and no CUDA toolkit are needed — the launcher fetches a portable
-Python 3.12 and the torch wheels bring their own CUDA runtime.
+No system Python and no CUDA or ROCm toolkit are needed — the launcher fetches a
+portable Python 3.12, and the torch wheels bring their own CUDA/ROCm runtime.
+AMD was verified end to end on a Strix Point iGPU (gfx1150): ROCm 7.1 drives it
+directly, no `HSA_OVERRIDE_GFX_VERSION` required.
 
 ## Native install
 
@@ -57,11 +62,17 @@ Flux also expects `ae.safetensors` in `models/VAE` and `clip_l.safetensors` +
 `t5xxl_fp8_e4m3fn.safetensors` in `models/text_encoder`. Point `FORGE_MODELS_DIR` at an
 existing collection to avoid copying.
 
-## The AI assistant — needs a build step
+## The AI assistant — built automatically on first run
 
-The bundled `llama-server` is a **Windows CUDA binary** and will not run here. To get the
-assistant on Linux you build it from the patch in
-[`forge-llm/patches/`](../forge-llm/patches):
+The bundled `llama-server` is a Windows CUDA binary and will not run here — so on Linux
+the launcher **builds the patched server itself on first run**: it clones llama.cpp at the
+pinned revision, applies the `/sleep`+`/wake` hibernate patch, and compiles just the
+server target for your backend (CUDA on NVIDIA, Vulkan on AMD). It needs `git`, `cmake`
+and a C compiler; if any are missing it prints a note and Forge starts without the
+assistant. The result is cached — relaunches compile nothing. Verified on an AMD iGPU:
+completions serve and the hibernate cycle preserves the KV cache.
+
+If you'd rather build it yourself (or audit the patch), the manual steps:
 
 ```bash
 git clone https://github.com/ggml-org/llama.cpp
@@ -78,11 +89,12 @@ Set `CMAKE_CUDA_ARCHITECTURES` for your card (`75` Turing/20xx, `86` Ampere/30xx
 `89` Ada/40xx, `120` Blackwell/50xx). This needs the **CUDA toolkit** (`nvcc`) installed —
 the only part of the project that does.
 
-Then set **Settings → AI Assistant → llama-server binary path** to your build. That gives
-you the same `/sleep` + `/wake` VRAM hibernate the Windows build has.
+For a manual build, set **Settings → AI Assistant → llama-server binary path** to it —
+the automatic build is found without any configuration (it deploys to
+`forge-llm/<backend>/`).
 
-Until you do that, run with `FORGE_NO_LLM=1` so the launcher doesn't try to fetch the
-~18 GB vision model:
+Don't want the assistant at all? `FORGE_NO_LLM=1` skips both the build and the ~18 GB
+vision-model download:
 
 ```bash
 FORGE_NO_LLM=1 ./start.sh
