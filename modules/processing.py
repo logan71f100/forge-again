@@ -833,6 +833,13 @@ def estimate_run_inference_memory(p: StableDiffusionProcessing) -> int:
             scale = getattr(p, 'hr_scale', None) or 2.0
             width, height = int(width * scale), int(height * scale)
 
+    # Real CFG (cfg_scale > 1) runs cond+uncond as a DOUBLED batch every step --
+    # Chroma and any non-distilled model need ~2x the activation memory of
+    # distilled flux at the same resolution. The original calibration was all
+    # CFG-1 runs, which is how a Chroma generation slipped under the reserve
+    # and hit the paging cliff at 54 s/step.
+    if (getattr(p, 'cfg_scale', 1) or 1) > 1:
+        batch = batch * 2
     mpx = (width * height * batch) / 1_000_000
     # flux constants tightened from measured data (2080 Ti, six 1024x1024 runs,
     # GGUF + SDPA): actual sampling overhead ~600-650 MB at 1.05 Mpx, so
