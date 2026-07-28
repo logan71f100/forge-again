@@ -48,10 +48,19 @@ detect_gpu() {
     fi
   fi
 
-  # 4. AMD ROCm – rocm-smi that actually reports a GPU; else /opt/rocm exists.
-  #    Match on "GPU" in rocm-smi's own output rather than vendor/board strings:
-  #    the previous 'amg|asrock|amd' pattern had a typo ("amg") and could match
-  #    a motherboard brand ("asrock") on a machine with no AMD GPU at all.
+  # 4. AMD. Detect the CARD, not the system ROCm install: the PyTorch ROCm
+  #    wheels bundle their own ROCm runtime, so an AMD GPU can run torch on ROCm
+  #    with no rocm-smi and no /opt/rocm anywhere on the machine. Keying off
+  #    those tools (as this used to) misclassified every stock AMD laptop as
+  #    "no ROCm" and sent it down a CPU-only path.
+  #    The PCI class check covers VGA (0300) and Display (0380) controllers --
+  #    AMD iGPUs like Strix report the latter.
+  if lspci -nn 2>/dev/null | grep -iE '\[03[0-9a-f]{2}\]' | grep -q '\[1002:'; then
+    echo "[bootstrap] Detected AMD GPU: $(lspci -nn 2>/dev/null | grep -iE '\[03[0-9a-f]{2}\]' | grep '\[1002:' | sed 's/.*\[AMD\/ATI\] //; s/ \[1002:.*//' | head -1)"
+    GPU=rocm
+    return
+  fi
+  # legacy fallbacks: an AMD box where lspci is unavailable
   if command -v rocm-smi >/dev/null 2>&1; then
     if rocm-smi --showid 2>/dev/null | grep -qiE '^GPU\[[0-9]+\]'; then
       echo "[bootstrap] Detected AMD GPU via rocm-smi"
@@ -279,7 +288,12 @@ if [ "${FORGE_NO_LLM:-}" = "1" ]; then
 else
   case "$GPU" in
     vulkan) build_llama vulkan || true ;;
-    rocm)   build_llama rocm || build_llama vulkan || true ;;   # vulkan is the fallback backend
+    # AMD: Vulkan FIRST for llama.cpp. ggml-vulkan needs only the Mesa driver
+    # every AMD box already has, whereas ggml-hip needs a full system ROCm
+    # (hipcc, headers) that the self-contained torch wheels do NOT provide --
+    # so on a stock AMD laptop the HIP build fails and Vulkan is what works.
+    # (torch still goes the ROCm route; the two backends are independent.)
+    rocm)   build_llama vulkan || build_llama rocm || true ;;
     nvidia) build_llama cuda   || true ;;
     mps)    build_llama metal  || true ;;
     # cpu: no GPU backend to build; the assistant would be unusably slow, so skip.
@@ -321,15 +335,22 @@ if [ ! -f venv/.deps_installed ] || [ -z "$REQHASH" ] || ! grep -qx "$REQHASH" v
 
   # Install third-party torch (platform) BEFORE requirements so the latter
   # satisfies `torch`, `torchvision` pins instead of fighting pip's solver.
+  # NOTE: $GPU picks the llama.cpp backend for the AI assistant AND the torch
+  # build, but they are NOT the same decision. PyTorch has no usable Vulkan
+  # compute backend, so "vulkan" can only ever mean CPU-only image generation --
+  # on an AMD card the GPU answer for torch is always ROCm. Keep the versions
+  # identical to requirements_versions.txt (torch 2.13.0 / torchvision 0.28.0)
+  # so the requirements install below is satisfied instead of fighting pip.
   echo "[bootstrap] installing torch ($GPU) ..."
   case "$GPU" in
     rocm)
+      # Official ROCm wheels: self-contained (they bundle the ROCm runtime), so
+      # no system ROCm install is required. Verified present for cp312 at
+      # rocm7.1. Override the level with TORCH_ROCM_INDEX for other cards.
       venv/bin/python -m pip install \
-        --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ \
-        --extra-index-url https://pypi.org/simple \
-        numpy==1.26.2 \
-        torch==2.7.1+rocm6.1 \
-        torchvision==0.22.1+rocm6.1 || fail
+        --index-url "${TORCH_ROCM_INDEX:-https://download.pytorch.org/whl/rocm7.1}" \
+        torch==2.13.0 \
+        torchvision==0.28.0 || fail
       ;;
     nvidia)
       venv/bin/python -m pip install \
@@ -337,12 +358,18 @@ if [ ! -f venv/.deps_installed ] || [ -z "$REQHASH" ] || ! grep -qx "$REQHASH" v
         torch==2.13.0+cu126 \
         torchvision==0.28.0+cu126 || fail
       ;;
-    vulkan)
-      # Vulkan uses ggml-vulkan backend (no PyTorch CUDA); use CPU/MPS torch
-      venv/bin/python -m pip install torch torchvision || fail
-      ;;
-    mps|cpu)
-      venv/bin/python -m pip install torch torchvision || fail
+    vulkan|mps|cpu)
+      # CPU wheels, explicitly. A bare `pip install torch` pulls the CUDA build
+      # from PyPI, which aborts on any non-NVIDIA box with a _preload_cuda_deps
+      # error -- that killed the whole bootstrap on an AMD laptop.
+      if [ "$GPU" = "mps" ]; then
+        venv/bin/python -m pip install torch==2.13.0 torchvision==0.28.0 || fail
+      else
+        venv/bin/python -m pip install \
+          --index-url https://download.pytorch.org/whl/cpu \
+          torch==2.13.0 torchvision==0.28.0 || fail
+        echo "[bootstrap] NOTE: torch is the CPU build — image generation will be slow."
+      fi
       ;;
   esac
 
