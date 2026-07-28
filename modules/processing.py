@@ -1426,6 +1426,12 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
     def sample(self, conditioning, unconditional_conditioning, seeds, subseeds, subseed_strength, prompts):
         self.sampler = sd_samplers.create_sampler(self.sampler_name, self.sd_model)
 
+        # never let a Kontext reference from an earlier img2img run leak into txt2img
+        try:
+            self.sd_model.forge_objects.unet.model_options.get('transformer_options', {}).pop('kontext_latents', None)
+        except AttributeError:
+            pass
+
         if self.firstpass_image is not None and self.enable_hr:
             # here we don't need to generate image, we just take self.firstpass_image and prepare it for hires fix
 
@@ -1940,6 +1946,18 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
 
         self.sd_model.forge_objects = self.sd_model.forge_objects_after_applying_lora.shallow_copy()
         apply_token_merging(self.sd_model, self.get_token_merging_ratio())
+
+        # Kontext reference edit: attach the clean init latent as reference
+        # tokens (backend/nn/flux.py kontext_latents path). Settings-option
+        # driven so it works from the UI, quicksettings, and the API
+        # (override_settings) alike -- a script can't, because the lazy-built
+        # img2img tab leaves script arg slots unassigned for headless callers.
+        to = self.sd_model.forge_objects.unet.model_options.setdefault('transformer_options', {})
+        to.pop('kontext_latents', None)   # clear-first: options dicts can be shared across runs
+        if shared.opts.data.get('forge_kontext_reference_edit', False) and self.init_latent is not None:
+            to['kontext_latents'] = [self.init_latent]
+            self.extra_generation_params['Kontext reference'] = True
+            print(f'[Kontext] reference latents attached: {tuple(self.init_latent.shape)}')
 
         if self.scripts is not None:
             self.scripts.process_before_every_sampling(self,

@@ -215,6 +215,7 @@ For img2img, VAE is used to process user's input image before the sampling, and 
 }))
 
 options_templates.update(options_section(('img2img', "img2img", "sd"), {
+    "forge_kontext_reference_edit": OptionInfo(False, "Kontext reference edit: use the img2img init image as an instruction-editing reference", infotext='Kontext reference').info("needs a FLUX.1 Kontext checkpoint; prompt = the edit instruction; set denoising to 1.0. Add this to Quicksettings for one-click access"),
     "inpainting_mask_weight": OptionInfo(1.0, "Inpainting conditioning mask strength", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}, infotext='Conditional mask weight'),
     "initial_noise_multiplier": OptionInfo(1.0, "Noise multiplier for img2img", gr.Slider, {"minimum": 0.0, "maximum": 1.5, "step": 0.001}, infotext='Noise multiplier'),
     "img2img_extra_noise": OptionInfo(0.0, "Extra noise multiplier for img2img and hires fix", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}, infotext='Extra noise').info("0 = disabled (default); should be lower than denoising strength"),

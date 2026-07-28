@@ -362,6 +362,12 @@ class Api:
                     raise HTTPException(status_code=422, detail="Cannot have a selectable script in the always on scripts params")
                 # always on script with no arg should always run so you don't really need to add them to the requests
                 if "args" in request.alwayson_scripts[alwayson_script_name]:
+                    # Lazy-built tabs (img2img and friends) defer script UI creation
+                    # until the tab is first opened in a browser, so args_from/args_to
+                    # are still None for headless callers. Crashing with a bare
+                    # TypeError helped nobody; explain the situation instead.
+                    if alwayson_script.args_from is None or alwayson_script.args_to is None:
+                        raise HTTPException(status_code=422, detail=f"always on script {alwayson_script_name} has no argument slots yet: its tab is lazily built and has not been opened in a browser this session, so its per-request args cannot be addressed. Open the tab once, or use a settings option / override_settings if the feature provides one.")
                     # min between arg length in scriptrunner and arg length in the request
                     for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from), len(request.alwayson_scripts[alwayson_script_name]["args"]))):
                         script_args[alwayson_script.args_from + idx] = request.alwayson_scripts[alwayson_script_name]["args"][idx]
