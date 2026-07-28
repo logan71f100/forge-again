@@ -375,6 +375,17 @@ def forge_main_entry():
     ui_forge_preset.change(js="clickLoraRefresh", fn=None, queue=False, show_progress=False)
     Context.root_block.load(_on_preset_change_filtered, inputs=None, outputs=output_targets, queue=False, show_progress=False)
 
+    # Keep the Replacer profile file in sync with the launch preset. mode_profile.json
+    # is only rewritten on an in-app preset switch (or by set_mode.py at start.sh time);
+    # a plain launch straight into a mode (config forge_preset) would otherwise leave a
+    # stale profile from a previous mode, handing Replacer the wrong defaults -- most
+    # visibly flux inpainting washed out by the sd/xl distilled-guidance value (3.5)
+    # instead of flux's ~30. This writes ONLY mode_profile.json (no config/ui rewrite).
+    try:
+        _load_set_mode().write_mode_profile(shared.opts.forge_preset)
+    except Exception as e:
+        print(f'[forge] could not sync Replacer mode profile: {e}')
+
     refresh_model_loading_parameters()
     return
 

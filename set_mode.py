@@ -126,9 +126,28 @@ def write_mode_files(mode, here=None):
         json.dump(u, open(up, "w", encoding="utf-8"), indent=4)
 
     # 3) mode_profile.json -> Replacer defaults (+ current mode marker)
+    write_mode_profile(mode, here)
+    return m, ex
+
+
+def write_mode_profile(mode, here=None):
+    """Write ONLY mode_profile.json (the Replacer defaults) for `mode`.
+
+    Cheap and side-effect-free beyond that one file, so it is safe to call at
+    startup to keep the profile in sync with the live forge_preset. The full
+    write_mode_files() also rewrites config.json/ui-config.json, which must NOT
+    happen on a plain launch (it would reset the user's checkpoint/modules to the
+    mode defaults). A stale profile from a previous mode is exactly what gives
+    Replacer the wrong defaults -- e.g. flux inpainting washed out by the sd/xl
+    distilled-guidance value (3.5) instead of flux's ~30.
+    """
+    mode = (mode or "xl").lower()
+    if mode not in ("sd", "xl", "flux"):
+        mode = "xl"
+    here = here or HERE
     prof = dict(REPLACER[mode]); prof.update(COMMON); prof["_mode"] = mode
     json.dump(prof, open(os.path.join(here, "mode_profile.json"), "w", encoding="utf-8"), indent=4)
-    return m, ex
+    return prof
 
 
 if __name__ == "__main__":
