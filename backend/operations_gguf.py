@@ -23,6 +23,19 @@ class ParameterGGUF(torch.nn.Parameter):
         if no_init:
             return
 
+        if isinstance(tensor, ParameterGGUF):
+            # Re-wrap of an existing ParameterGGUF. This happens implicitly: when
+            # torch.nn.Parameter(x) receives a Parameter subclass, __new__ returns
+            # that subclass and Python then calls type(obj).__init__ -- i.e. THIS
+            # method -- with the ParameterGGUF as `tensor`. It has no .tensor_type
+            # (that only exists on raw gguf-reader tensors), so carry the quant
+            # metadata over instead of crashing.
+            self.gguf_cls = tensor.gguf_cls
+            self.real_shape = tensor.real_shape
+            self.computation_dtype = tensor.computation_dtype
+            self.baked = tensor.baked
+            return
+
         self.gguf_cls = quants_mapping.get(tensor.tensor_type, None)
         self.real_shape = torch.Size(reversed(list(tensor.shape)))
         self.computation_dtype = torch.float16
