@@ -398,26 +398,67 @@ class IntegratedFluxTransformer2DModel(nn.Module):
         del vec
         return img
 
-    def forward(self, x, timestep, context, y, guidance=None, **kwargs):
-        bs, c, h, w = x.shape
+    def _patchify(self, x, bs, index=0, h_offset=0, w_offset=0):
+        """Patchify a latent into tokens + position ids.
+
+        index goes into id dim 0 -- Kontext marks reference-image tokens with
+        index=1 so RoPE separates them from the target image (index=0). The
+        h/w offsets tile multiple references apart in position space.
+        """
         input_device = x.device
         input_dtype = x.dtype
         patch_size = 2
-        pad_h = (patch_size - x.shape[-2] % patch_size) % patch_size
-        pad_w = (patch_size - x.shape[-1] % patch_size) % patch_size
+        h, w = x.shape[-2], x.shape[-1]
+        pad_h = (patch_size - h % patch_size) % patch_size
+        pad_w = (patch_size - w % patch_size) % patch_size
         x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h), mode="circular")
         img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch_size, pw=patch_size)
-        del x, pad_h, pad_w
         h_len = ((h + (patch_size // 2)) // patch_size)
         w_len = ((w + (patch_size // 2)) // patch_size)
+        h_offset = ((h_offset + (patch_size // 2)) // patch_size)
+        w_offset = ((w_offset + (patch_size // 2)) // patch_size)
         img_ids = torch.zeros((h_len, w_len, 3), device=input_device, dtype=input_dtype)
-        img_ids[..., 1] = img_ids[..., 1] + torch.linspace(0, h_len - 1, steps=h_len, device=input_device, dtype=input_dtype)[:, None]
-        img_ids[..., 2] = img_ids[..., 2] + torch.linspace(0, w_len - 1, steps=w_len, device=input_device, dtype=input_dtype)[None, :]
+        img_ids[..., 0] = index
+        img_ids[..., 1] = img_ids[..., 1] + torch.linspace(h_offset, h_len - 1 + h_offset, steps=h_len, device=input_device, dtype=input_dtype)[:, None]
+        img_ids[..., 2] = img_ids[..., 2] + torch.linspace(w_offset, w_len - 1 + w_offset, steps=w_len, device=input_device, dtype=input_dtype)[None, :]
         img_ids = repeat(img_ids, "h w c -> b (h w) c", b=bs)
-        txt_ids = torch.zeros((bs, context.shape[1], 3), device=input_device, dtype=input_dtype)
-        del input_device, input_dtype
+        return img, img_ids, h_len, w_len
+
+    def forward(self, x, timestep, context, y, guidance=None, transformer_options=None, **kwargs):
+        bs, c, h, w = x.shape
+        img, img_ids, h_len, w_len = self._patchify(x, bs)
+        del x
+        img_tokens = img.shape[1]
+
+        # Kontext instruction editing: clean reference latents ride along as
+        # extra tokens (index=1 position ids), attended to by every block but
+        # sliced off the output. Refs are per-image (bs may be cond+uncond
+        # batched -- same reference for both), stored under transformer_options
+        # so they bypass cond batching entirely.
+        refs = (transformer_options or {}).get('kontext_latents') or kwargs.get('kontext_latents')
+        if refs:
+            ref_h = 0
+            ref_w = 0
+            for ref in refs:
+                ref = ref.to(device=img.device, dtype=img.dtype)
+                if ref.shape[0] != bs:
+                    ref = ref.repeat(bs // ref.shape[0], 1, 1, 1)
+                h_offset = 0
+                w_offset = 0
+                if ref.shape[-2] + ref_h > ref.shape[-1] + ref_w:
+                    w_offset = ref_w
+                else:
+                    h_offset = ref_h
+                ref_h = max(ref_h, ref.shape[-2] + h_offset)
+                ref_w = max(ref_w, ref.shape[-1] + w_offset)
+                kontext, kontext_ids, _, _ = self._patchify(ref, bs, index=1, h_offset=h_offset, w_offset=w_offset)
+                img = torch.cat([img, kontext], dim=1)
+                img_ids = torch.cat([img_ids, kontext_ids], dim=1)
+
+        txt_ids = torch.zeros((bs, context.shape[1], 3), device=img.device, dtype=img.dtype)
         out = self.inner_forward(img, img_ids, context, txt_ids, timestep, y, guidance)
         del img, img_ids, txt_ids, timestep, context
+        out = out[:, :img_tokens]
         out = rearrange(out, "b (h w) (c ph pw) -> b c (h ph) (w pw)", h=h_len, w=w_len, ph=2, pw=2)[:, :, :h, :w]
         del h_len, w_len, bs
         return out

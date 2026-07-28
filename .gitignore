@@ -136,3 +136,5 @@ coverage.xml
 /forge-llm/rocm/
 /forge-llm/cuda/
 /forge-llm/metal/
+
+/.hf_token
