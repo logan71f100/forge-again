@@ -1259,7 +1259,14 @@ def setup_ui_api(app):
 
     app.add_api_route("/internal/quicksettings-hint", quicksettings_hint, methods=["GET"], response_model=list[QuicksettingsHint])
 
-    app.add_api_route("/internal/ping", lambda: {}, methods=["GET"])
+    # boot_id lets the front-end watchdog tell a connection blip apart from a
+    # server RESTART: a stale page's gradio session is dead against a new
+    # process (progress events freeze mid-run, submits misbehave), and the only
+    # sane recovery is a reload -- connectionWatchdog.js does that when this
+    # value changes.
+    import uuid
+    boot_id = uuid.uuid4().hex
+    app.add_api_route("/internal/ping", lambda: {"boot_id": boot_id}, methods=["GET"])
 
     app.add_api_route("/internal/profile-startup", lambda: timer.startup_record, methods=["GET"])
 

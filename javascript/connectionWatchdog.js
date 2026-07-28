@@ -61,6 +61,70 @@
         }
     }
 
+    // ---- server-restart detection -------------------------------------------
+    // A restart is NOT a blip: this page's gradio session died with the old
+    // process, so progress events freeze mid-run and new submits misbehave in
+    // subtle ways. The ping payload carries a per-process boot_id; when it
+    // changes, save the prompt fields and reload into the new server. The
+    // sessionStorage guard makes the reload one-shot per boot so a broken
+    // server can't cause a reload loop.
+    var bootId = null;
+
+    function savePrompts() {
+        try {
+            var app = (typeof gradioApp === 'function') ? gradioApp() : document;
+            var saved = { t: Date.now(), fields: {} };
+            ['txt2img_prompt', 'txt2img_neg_prompt', 'img2img_prompt', 'img2img_neg_prompt'].forEach(function (id) {
+                var ta = app.querySelector('#' + id + ' textarea');
+                if (ta && ta.value) saved.fields[id] = ta.value;
+            });
+            localStorage.setItem('fa-restart-prompts', JSON.stringify(saved));
+        } catch (e) { /* storage unavailable */ }
+    }
+
+    function restorePrompts(attempt) {
+        attempt = attempt || 0;
+        try {
+            var raw = localStorage.getItem('fa-restart-prompts');
+            if (!raw) return;
+            var saved = JSON.parse(raw);
+            if (!saved || Date.now() - saved.t > 10 * 60 * 1000) {          // stale
+                localStorage.removeItem('fa-restart-prompts');
+                return;
+            }
+            // gradio renders after DOMContentLoaded (and some tabs lazily), so
+            // wait until at least one saved field's textarea exists before
+            // consuming the save; give up quietly after ~20s.
+            var app = (typeof gradioApp === 'function') ? gradioApp() : document;
+            var ids = Object.keys(saved.fields);
+            var present = ids.filter(function (id) { return app.querySelector('#' + id + ' textarea'); });
+            if (present.length === 0) {
+                if (attempt < 40) setTimeout(function () { restorePrompts(attempt + 1); }, 500);
+                else localStorage.removeItem('fa-restart-prompts');
+                return;
+            }
+            localStorage.removeItem('fa-restart-prompts');
+            ids.forEach(function (id) {
+                var ta = app.querySelector('#' + id + ' textarea');
+                if (ta && !ta.value) {
+                    ta.value = saved.fields[id];
+                    if (typeof updateInput === 'function') updateInput(ta);
+                    else ta.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            });
+        } catch (e) { /* storage unavailable */ }
+    }
+
+    function onServerRestarted(newBootId) {
+        if (sessionStorage.getItem('fa-reloaded-for') === newBootId) return;   // already reloaded once for this boot
+        sessionStorage.setItem('fa-reloaded-for', newBootId);
+        savePrompts();
+        var b = ensureBanner();
+        b.textContent = '↻ Server restarted — reloading the UI…';
+        b.style.background = '#b7791f'; b.style.color = '#fff'; b.style.display = 'block';
+        setTimeout(function () { location.reload(); }, 800);
+    }
+
     var inflight = false;
     function ping() {
         if (inflight) return;
@@ -68,7 +132,18 @@
         var ctrl = new AbortController();
         var to = setTimeout(function () { ctrl.abort(); }, 6000);
         fetch('./internal/ping', { method: 'GET', cache: 'no-store', signal: ctrl.signal })
-            .then(function (r) { clearTimeout(to); inflight = false; setOnline(!!r && r.ok); })
+            .then(function (r) {
+                clearTimeout(to); inflight = false;
+                setOnline(!!r && r.ok);
+                if (!r || !r.ok) return null;
+                return r.json().catch(function () { return null; });
+            })
+            .then(function (data) {
+                var id = data && data.boot_id;
+                if (!id) return;                       // older server: no boot_id, keep blip-only behavior
+                if (bootId === null) { bootId = id; return; }
+                if (id !== bootId) onServerRestarted(id);
+            })
             .catch(function () { clearTimeout(to); inflight = false; setOnline(false); });
     }
 
@@ -89,6 +164,7 @@
             setInterval(ping, 4000);
         }
         ping();   // immediate first check
+        restorePrompts();   // bring back prompts saved just before a restart-reload
 
         // Re-check the instant the tab regains focus/visibility, so returning to a
         // backgrounded tab recovers a stuck generation right away.
