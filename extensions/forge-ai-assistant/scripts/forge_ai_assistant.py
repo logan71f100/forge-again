@@ -1073,6 +1073,13 @@ class ForgeAIAssistantScript(scripts_mod.Script):
     def process(self, p, *args):
         if _api_ready():
             if _model_name_loaded():
+                # Already hibernated (idle since boot or a previous run) — Forge
+                # already owns the VRAM. Arming the restore worker here would
+                # wake the LLM after EVERY generation, evicting the Forge model
+                # and making every back-to-back run pay a full weight re-upload.
+                # Leave it parked; the first chat message auto-wakes it.
+                if _llm_sleeping():
+                    return
                 print("[forge-ai] generation starting — soft-unloading LLM to free VRAM")
                 result = _stop_textgen("soft")
                 if not result.get("soft"):
