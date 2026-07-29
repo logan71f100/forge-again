@@ -27,7 +27,9 @@ function extraNetworksTabNav(tabname) {
 
 function setupExtraNetworksForTab(tabname) {
     function registerPrompt(tabname, id) {
-        var textarea = gradioApp().querySelector("#" + id + " > label > textarea");
+        // gradio 6 puts a div.input-container between the label and the textarea,
+        // so the old `> label > textarea` selector no longer matches
+        var textarea = gradioApp().querySelector("#" + id + " textarea");
         if (!textarea) return;   // prompt not mounted yet (lazy tab)
 
         if (!activePromptTextarea[tabname]) {
@@ -333,16 +335,16 @@ function updatePromptArea(text, textArea, isNeg) {
 
 function cardClicked(tabname, textToAdd, textToAddNegative, allowNegativePrompt) {
     if (textToAddNegative.length > 0) {
-        updatePromptArea(textToAdd, gradioApp().querySelector("#" + tabname + "_prompt > label > textarea"));
-        updatePromptArea(textToAddNegative, gradioApp().querySelector("#" + tabname + "_neg_prompt > label > textarea"), true);
+        updatePromptArea(textToAdd, gradioApp().querySelector("#" + tabname + "_prompt textarea"));
+        updatePromptArea(textToAddNegative, gradioApp().querySelector("#" + tabname + "_neg_prompt textarea"), true);
     } else {
-        var textarea = allowNegativePrompt ? activePromptTextarea[tabname] : gradioApp().querySelector("#" + tabname + "_prompt > label > textarea");
+        var textarea = allowNegativePrompt ? activePromptTextarea[tabname] : gradioApp().querySelector("#" + tabname + "_prompt textarea");
         updatePromptArea(textToAdd, textarea);
     }
 }
 
 function saveCardPreview(event, tabname, filename) {
-    var textarea = gradioApp().querySelector("#" + tabname + '_preview_filename  > label > textarea');
+    var textarea = gradioApp().querySelector("#" + tabname + '_preview_filename textarea');
     var button = gradioApp().getElementById(tabname + '_save_preview');
 
     textarea.value = filename;

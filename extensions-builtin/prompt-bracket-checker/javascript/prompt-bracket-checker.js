@@ -26,7 +26,9 @@ function checkBrackets(textArea, counterElt) {
 }
 
 function setupBracketChecking(id_prompt, id_counter) {
-    var textarea = gradioApp().querySelector("#" + id_prompt + " > label > textarea");
+    // gradio 6 puts a div.input-container between the label and the textarea,
+    // so the old `> label > textarea` selector no longer matches
+    var textarea = gradioApp().querySelector("#" + id_prompt + " textarea");
     var counter = gradioApp().getElementById(id_counter);
 
     if (textarea && counter) {
