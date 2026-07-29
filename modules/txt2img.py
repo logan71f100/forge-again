@@ -62,6 +62,10 @@ def txt2img_create_processing(id_task: str, request: gr.Request, prompt: str, ne
 def txt2img_upscale_function(id_task: str, request: gr.Request, gallery, gallery_index, generation_info, *args):
     assert len(gallery) > 0, 'No image to upscale'
 
+    # a lost JS selection reports -1; with a single image there is no ambiguity
+    if gallery_index < 0 and len(gallery) == 1:
+        gallery_index = 0
+
     if gallery_index < 0 or gallery_index >= len(gallery):
         return gallery, generation_info, f'Bad image index: {gallery_index}', ''
 

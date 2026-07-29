@@ -8,7 +8,12 @@ function set_theme(theme) {
 }
 
 function all_gallery_buttons() {
-    var allGalleryButtons = gradioApp().querySelectorAll('[style="display: block;"].tabitem div[id$=_gallery].gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small');
+    // gradio 4 toggled tab panes with an inline display style; gradio 6 unmounts
+    // inactive panes entirely, so the old '[style="display: block;"].tabitem'
+    // prefix matched nothing and every selected_gallery_index() returned -1
+    // ("Bad image index: -1" on the hires-fix button). The offsetParent check
+    // below already limits this to the visible gallery.
+    var allGalleryButtons = gradioApp().querySelectorAll('div[id$=_gallery].gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small');
     var visibleGalleryButtons = [];
     allGalleryButtons.forEach(function(elem) {
         if (elem.parentElement.offsetParent) {
