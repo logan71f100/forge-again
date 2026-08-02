@@ -12,9 +12,9 @@ FLUX_MODS = [
 ]
 # model + main-tab (txt2img/img2img) optimized defaults
 MODELS = {
-    "sd":   {"ckpt": "epicrealism_pureEvolutionV5.safetensors",    "mods": [],        "W": 512,  "H": 512,  "cfg": 7.0, "dcfg": 3.5, "denoise": 0.5,  "hires_denoise": 0.4,  "steps": 28, "sampler": "DPM++ 2M",     "scheduler": "Karras", "infmem": 1025, "udtype": ""},
-    "xl":   {"ckpt": "epicrealismXL_vxviiCrystalclear.safetensors", "mods": [],        "W": 1024, "H": 1024, "cfg": 6.0, "dcfg": 3.5, "denoise": 0.7,  "hires_denoise": 0.35, "steps": 30, "sampler": "DPM++ 2M SDE", "scheduler": "Karras", "infmem": 1025, "udtype": ""},
-    "flux": {"ckpt": "fluxunchained-fill-full-Q6_K.gguf",           "mods": FLUX_MODS, "W": 1024, "H": 1024, "cfg": 1.0, "dcfg": 3.5, "denoise": 1.0,  "hires_denoise": 0.3,  "steps": 25, "sampler": "Euler",        "scheduler": "Simple", "infmem": 3072, "udtype": "Automatic (fp16 LoRA)"},
+    "sd":   {"ckpt": "epicrealism_pureEvolutionV5.safetensors",    "mods": [],        "W": 512,  "H": 512,  "cfg": 7.0, "dcfg": 3.5, "denoise": 0.5,  "hires_denoise": 0.4,  "steps": 28, "sampler": "DPM++ 2M",     "scheduler": "Karras", "infmem": 1025, "udtype": "",                      "mask_blur": 4, "inpaint_padding": 64},
+    "xl":   {"ckpt": "epicrealismXL_vxviiCrystalclear.safetensors", "mods": [],        "W": 1024, "H": 1024, "cfg": 6.0, "dcfg": 3.5, "denoise": 0.7,  "hires_denoise": 0.35, "steps": 30, "sampler": "DPM++ 2M SDE", "scheduler": "Karras", "infmem": 1025, "udtype": "",                      "mask_blur": 8, "inpaint_padding": 96},
+    "flux": {"ckpt": "fluxunchained-fill-full-Q6_K.gguf",           "mods": FLUX_MODS, "W": 1024, "H": 1024, "cfg": 1.0, "dcfg": 3.5, "denoise": 1.0,  "hires_denoise": 0.3,  "steps": 25, "sampler": "Euler",        "scheduler": "Simple", "infmem": 3072, "udtype": "Automatic (fp16 LoRA)", "mask_blur": 8, "inpaint_padding": 96},
 }
 # Replacer optimized profile (read at UI build by the patched make_advanced_options.py / inpaint.py)
 REPLACER = {
@@ -153,6 +153,15 @@ def write_mode_files(mode, here=None):
             u[f"{tab}/Sampling steps/value"] = m["steps"]
             u[f"{tab}/Sampling method/value"] = m["sampler"]
             u[f"{tab}/Schedule type/value"] = m["scheduler"]
+        # inpaint defaults (img2img tab only): "Only masked" renders the masked
+        # crop at full generation resolution (the single biggest quality win for
+        # small-region fixes like hands/faces), and generous padding gives the
+        # model enough surrounding context to conform to instead of inventing
+        # content. Mask blur scales with the mode's working resolution.
+        u["img2img/Masked content/value"] = "original"
+        u["img2img/Inpaint area/value"] = "Only masked"
+        u["img2img/Mask blur/value"] = m["mask_blur"]
+        u["img2img/Only masked padding, pixels/value"] = m["inpaint_padding"]
         # hires-fix defaults: in txt2img the "Denoising strength" slider IS the
         # hires-fix denoise. Latent upscaling needs high denoise, and high
         # denoise at 2x redraws anatomy (elongated bodies on XL) -- a GAN
