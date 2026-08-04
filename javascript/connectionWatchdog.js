@@ -98,6 +98,66 @@
         }
     }
 
+    // ---- queue-stream forensics ---------------------------------------------
+    // gradio 6 receives ALL queue events (progress, completion + the result
+    // gallery payload) over a fetch'd text/event-stream on /queue/data. When it
+    // dies mid-job the server finishes but the page shows stale results — the
+    // orphan detector below cleans up, but to actually FIX the drops we need to
+    // see them. Wrap fetch for queue/data: log open/close/error/cancel with
+    // durations ([fa-stream] in the console, ring buffer on
+    // window.faStreamLog), and banner immediately when a stream dies while the
+    // UI is mid-generation.
+    window.faStreamLog = window.faStreamLog || [];
+    function slog(msg) {
+        var line = new Date().toISOString() + ' ' + msg;
+        window.faStreamLog.push(line);
+        if (window.faStreamLog.length > 50) window.faStreamLog.shift();
+        console.log('[fa-stream] ' + line);
+    }
+
+    function streamDied(kind, seconds) {
+        slog('queue stream ' + kind + ' after ' + seconds + 's');
+        if (!uiLooksGenerating()) return;
+        var b = ensureBanner();
+        b.textContent = '⚠ Generation stream ' + kind + ' after ' + seconds + 's — the run continues server-side; result lands in the output folder.';
+        b.style.background = '#b7791f'; b.style.color = '#fff'; b.style.display = 'block';
+        setTimeout(function () { if (online) b.style.display = 'none'; }, 8000);
+    }
+
+    var origFetch = window.fetch;
+    window.fetch = function (input) {
+        var url = (typeof input === 'string') ? input : ((input && input.url) || '');
+        if (url.indexOf('queue/data') === -1) return origFetch.apply(this, arguments);
+        var t0 = Date.now();
+        var secs = function () { return ((Date.now() - t0) / 1000).toFixed(1); };
+        slog('queue stream opened');
+        return origFetch.apply(this, arguments).then(function (resp) {
+            try {
+                if (!resp || !resp.body || !window.ReadableStream) return resp;
+                var reader = resp.body.getReader();
+                var monitored = new ReadableStream({
+                    pull: function (controller) {
+                        return reader.read().then(function (r) {
+                            if (r.done) { slog('queue stream closed cleanly after ' + secs() + 's'); controller.close(); return; }
+                            controller.enqueue(r.value);
+                        }).catch(function (err) {
+                            streamDied('DROPPED (' + (err && err.name || 'error') + ')', secs());
+                            controller.error(err);
+                        });
+                    },
+                    cancel: function (reason) {
+                        slog('queue stream cancelled by page after ' + secs() + 's');
+                        return reader.cancel(reason);
+                    }
+                });
+                return new Response(monitored, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+            } catch (e) { return resp; }
+        }, function (err) {
+            streamDied('FAILED to open (' + (err && err.name || 'error') + ')', secs());
+            throw err;
+        });
+    };
+
     // ---- server-restart detection -------------------------------------------
     // A restart is NOT a blip: this page's gradio session died with the old
     // process, so progress events freeze mid-run and new submits misbehave in
