@@ -838,7 +838,12 @@ def estimate_run_inference_memory(p: StableDiffusionProcessing) -> int:
     # distilled flux at the same resolution. The original calibration was all
     # CFG-1 runs, which is how a Chroma generation slipped under the reserve
     # and hit the paging cliff at 54 s/step.
-    if (getattr(p, 'cfg_scale', 1) or 1) > 1:
+    # FLUX ONLY: the flux constants were measured on CFG-1 (distilled) runs, so
+    # real CFG genuinely doubles past them. The xl/sd first-guess constants were
+    # always sized against normal (CFG>1) usage -- doubling them double-counts,
+    # over-reserves ~2x, and evicts weights that fit fine (XL at 1024x1024
+    # reserved 3.7 GB and paid model-moving on every single run).
+    if getattr(shared.opts, 'forge_preset', 'xl') == 'flux' and (getattr(p, 'cfg_scale', 1) or 1) > 1:
         batch = batch * 2
     mpx = (width * height * batch) / 1_000_000
     # flux constants tightened from measured data (2080 Ti, six 1024x1024 runs,
