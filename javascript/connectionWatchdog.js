@@ -31,18 +31,55 @@
         return banner;
     }
 
-    function recoverStuckUI() {
+    function recoverStuckUI(fullCleanup) {
         // Backend is reachable again — clear any stuck "Queued…" placeholder and
         // bring the Generate button back so the user can re-submit. No reload.
+        // fullCleanup additionally removes ACTIVE progress bars — only safe when
+        // the server has confirmed nothing is running or queued.
         try {
             var app = (typeof gradioApp === 'function') ? gradioApp() : document;
-            app.querySelectorAll('.progressDiv.pending-placeholder').forEach(function (p) { p.remove(); });
+            var sel = fullCleanup ? '.progressDiv' : '.progressDiv.pending-placeholder';
+            app.querySelectorAll(sel).forEach(function (p) { p.remove(); });
             if (typeof showSubmitButtons === 'function') {
                 app.querySelectorAll('button[id$="_generate"]').forEach(function (btn) {
                     showSubmitButtons(btn.id.slice(0, -'_generate'.length), true);
                 });
             }
         } catch (e) { /* UI not ready */ }
+    }
+
+    // ---- orphaned-generation detection --------------------------------------
+    // gradio 6 delivers completion over an SSE event stream. If that stream
+    // dies mid-job (network blip, sleep/wake, proxy timeout) the server keeps
+    // working and finishes, but the page never hears about it: the UI shows
+    // "generating" forever while the server sits idle. The ping payload's
+    // `busy` flag (running or queued anywhere) lets us catch that state:
+    // UI-generating + server-idle for several consecutive beats => reset the
+    // controls in place (no reload; the finished image is in the output dir).
+    var idleStrikes = 0;
+
+    function uiLooksGenerating() {
+        try {
+            var app = (typeof gradioApp === 'function') ? gradioApp() : document;
+            var buttons = app.querySelectorAll('button[id$="_interrupt"]');
+            for (var i = 0; i < buttons.length; i++) {
+                if (buttons[i].offsetParent && getComputedStyle(buttons[i]).display !== 'none') return true;
+            }
+        } catch (e) { /* UI not ready */ }
+        return false;
+    }
+
+    function checkOrphanedGeneration(serverBusy) {
+        if (serverBusy !== false) { idleStrikes = 0; return; }   // busy or older server (no flag)
+        if (!uiLooksGenerating()) { idleStrikes = 0; return; }
+        idleStrikes++;
+        if (idleStrikes < 4) return;                             // ~16s of disagreement
+        idleStrikes = 0;
+        recoverStuckUI(true);
+        var b = ensureBanner();
+        b.textContent = '⚠ Lost the generation connection — controls reset. If the run finished, the image is in your output folder.';
+        b.style.background = '#b7791f'; b.style.color = '#fff'; b.style.display = 'block';
+        setTimeout(function () { if (online) b.style.display = 'none'; }, 6000);
     }
 
     function setOnline(nowOnline) {
@@ -139,7 +176,9 @@
                 return r.json().catch(function () { return null; });
             })
             .then(function (data) {
-                var id = data && data.boot_id;
+                if (!data) return;
+                checkOrphanedGeneration(data.busy);
+                var id = data.boot_id;
                 if (!id) return;                       // older server: no boot_id, keep blip-only behavior
                 if (bootId === null) { bootId = id; return; }
                 if (id !== bootId) onServerRestarted(id);

@@ -1266,7 +1266,17 @@ def setup_ui_api(app):
     # value changes.
     import uuid
     boot_id = uuid.uuid4().hex
-    app.add_api_route("/internal/ping", lambda: {"boot_id": boot_id}, methods=["GET"])
+
+    def _ping():
+        # busy tells the watchdog whether ANY generation is running or queued
+        # (progress.pending_tasks is registered at submit time, current_task
+        # while running). A page whose queue event-stream died shows
+        # "generating" forever on an idle server; the watchdog uses this to
+        # detect that orphaned state and reset the controls.
+        from modules import progress
+        return {"boot_id": boot_id, "busy": progress.current_task is not None or bool(progress.pending_tasks)}
+
+    app.add_api_route("/internal/ping", _ping, methods=["GET"])
 
     app.add_api_route("/internal/profile-startup", lambda: timer.startup_record, methods=["GET"])
 
