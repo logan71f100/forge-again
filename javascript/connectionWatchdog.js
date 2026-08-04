@@ -108,12 +108,83 @@
     // window.faStreamLog), and banner immediately when a stream dies while the
     // UI is mid-generation.
     window.faStreamLog = window.faStreamLog || [];
+    var shippedIdx = 0;
     function slog(msg) {
         var line = new Date().toISOString() + ' ' + msg;
         window.faStreamLog.push(line);
-        if (window.faStreamLog.length > 50) window.faStreamLog.shift();
+        if (window.faStreamLog.length > 200) { window.faStreamLog.shift(); shippedIdx = Math.max(0, shippedIdx - 1); }
         console.log('[fa-stream] ' + line);
     }
+
+    // Ship new log lines to the server (client-debug.log) so connection
+    // problems can be diagnosed server-side. Piggybacks on the ping cadence.
+    function shipLog() {
+        if (shippedIdx >= window.faStreamLog.length) return;
+        var lines = window.faStreamLog.slice(shippedIdx);
+        shippedIdx = window.faStreamLog.length;
+        try {
+            origFetch('./internal/client-log', {
+                method: 'POST', cache: 'no-store',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lines: lines })
+            }).catch(function () { /* server down; lines stay in console */ });
+        } catch (e) { /* ignore */ }
+    }
+
+    // Decode the SSE bytes flowing through the monitored stream and log every
+    // queue event type — this shows definitively whether process_completed
+    // (which carries the result gallery payload) ever reached this page.
+    function makeSSEDecoder() {
+        var buf = '';
+        var dec = new TextDecoder();
+        var state = { sawClose: false };
+        var feed = function (chunk) {
+            try {
+                buf += dec.decode(chunk, { stream: true });
+                var parts = buf.split('\n\n');
+                buf = parts.pop();
+                parts.forEach(function (block) {
+                    var m = block.match(/^data:\s*(.*)$/m);
+                    if (!m) return;
+                    try {
+                        var ev = JSON.parse(m[1]);
+                        var msg = ev.msg || '(no msg)';
+                        if (msg === 'process_completed') {
+                            var out = ev.output || {};
+                            var summary = 'success=' + ev.success;
+                            try {
+                                var dataArr = out.data || [];
+                                var imgs = JSON.stringify(dataArr).match(/"(?:url|path)":/g);
+                                summary += ' outputs=' + dataArr.length + ' fileRefs=' + (imgs ? imgs.length : 0);
+                            } catch (e2) { /* summary best-effort */ }
+                            slog('event process_completed ' + summary);
+                        } else if (msg !== 'progress' && msg !== 'estimation') {
+                            if (msg === 'close_stream') state.sawClose = true;
+                            slog('event ' + msg);
+                        }
+                    } catch (e3) { /* non-JSON data line */ }
+                });
+            } catch (e) { /* decoder hiccup — never break the stream */ }
+        };
+        feed.state = state;
+        return feed;
+    }
+
+    // Gallery image-load failures: the completion event can arrive fine and the
+    // <img> fetch still 404 (tempdir/cache URL problems) — catch those too.
+    document.addEventListener('error', function (ev) {
+        var el = ev.target;
+        if (!el || el.tagName !== 'IMG') return;
+        if (!el.closest('.gradio-gallery')) return;
+        var src = el.src || '(no src)';
+        slog('gallery IMG failed to load: ' + src.slice(0, 300));
+        try {
+            origFetch(src, { method: 'GET', cache: 'no-store' }).then(function (r) {
+                slog('gallery IMG url probe: HTTP ' + r.status + ' for ' + src.slice(0, 120));
+                shipLog();
+            }).catch(function (e) { slog('gallery IMG url probe failed: ' + e); shipLog(); });
+        } catch (e) { /* ignore */ }
+    }, true);
 
     function streamDied(kind, seconds) {
         slog('queue stream ' + kind + ' after ' + seconds + 's');
@@ -135,13 +206,21 @@
             try {
                 if (!resp || !resp.body || !window.ReadableStream) return resp;
                 var reader = resp.body.getReader();
+                var decode = makeSSEDecoder();
                 var monitored = new ReadableStream({
                     pull: function (controller) {
                         return reader.read().then(function (r) {
-                            if (r.done) { slog('queue stream closed cleanly after ' + secs() + 's'); controller.close(); return; }
+                            if (r.done) { slog('queue stream closed cleanly after ' + secs() + 's'); shipLog(); controller.close(); return; }
+                            decode(r.value);
                             controller.enqueue(r.value);
                         }).catch(function (err) {
-                            streamDied('DROPPED (' + (err && err.name || 'error') + ')', secs());
+                            if (decode.state.sawClose) {
+                                // gradio aborts its own fetch after close_stream — normal teardown
+                                slog('queue stream ended (client abort after close_stream) after ' + secs() + 's');
+                            } else {
+                                streamDied('DROPPED (' + (err && err.name || 'error') + ')', secs());
+                            }
+                            shipLog();
                             controller.error(err);
                         });
                     },
@@ -236,6 +315,7 @@
                 return r.json().catch(function () { return null; });
             })
             .then(function (data) {
+                shipLog();   // piggyback: flush any new forensic lines to the server
                 if (!data) return;
                 checkOrphanedGeneration(data.busy);
                 var id = data.boot_id;
@@ -271,6 +351,14 @@
         window.addEventListener('focus', ping);
         window.addEventListener('online', ping);
         window.addEventListener('offline', function () { setOnline(false); });
+        // flush unshipped forensics when the page goes away
+        window.addEventListener('pagehide', function () {
+            if (shippedIdx >= window.faStreamLog.length || !navigator.sendBeacon) return;
+            var lines = window.faStreamLog.slice(shippedIdx);
+            shippedIdx = window.faStreamLog.length;
+            navigator.sendBeacon('./internal/client-log',
+                new Blob([JSON.stringify({ lines: lines })], { type: 'application/json' }));
+        });
     }
 
     if (document.body) start();

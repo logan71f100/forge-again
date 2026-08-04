@@ -1278,6 +1278,31 @@ def setup_ui_api(app):
 
     app.add_api_route("/internal/ping", _ping, methods=["GET"])
 
+    # Client-side connection forensics land here (connectionWatchdog.js ships
+    # its [fa-stream] ring buffer): queue-stream lifecycle, decoded queue
+    # events, gallery image-load failures. Appends to client-debug.log in the
+    # webui root (gitignored via *.log) so stuck-generation reports can be
+    # diagnosed server-side without asking the user for their browser console.
+    from fastapi import Body
+
+    def _client_log(payload: dict = Body(...)):
+        lines = payload.get("lines") or []
+        if not isinstance(lines, list):
+            return {"ok": False}
+        path = os.path.join(script_path, "client-debug.log")
+        try:
+            if os.path.exists(path) and os.path.getsize(path) > 2_000_000:
+                os.replace(path, path + ".1")   # single rotation, keeps last ~2MB too
+            with open(path, "a", encoding="utf-8") as f:
+                stamp = datetime.datetime.now().strftime("%H:%M:%S")
+                for ln in lines[:200]:
+                    f.write(f"[{stamp} recv] {str(ln)[:2000]}\n")
+        except OSError:
+            pass
+        return {"ok": True}
+
+    app.add_api_route("/internal/client-log", _client_log, methods=["POST"])
+
     app.add_api_route("/internal/profile-startup", lambda: timer.startup_record, methods=["GET"])
 
     def download_sysinfo(attachment=False):
