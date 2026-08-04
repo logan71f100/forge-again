@@ -237,6 +237,55 @@
         });
     };
 
+    // ---- pre-generate source snapshot ---------------------------------------
+    // "output is a blank/white image" reports: log what the img2img source
+    // binds actually hold at the moment Generate is clicked (length, decoded
+    // dimensions, mean RGBA of a 16x16 downsample). If the source is blank AT
+    // SUBMIT the canvas->bind sync lost it; if it's intact the bug is
+    // server-side. Ships with the forensics log.
+    function snapshotBind(ta, name) {
+        var v = (ta && ta.value) || '';
+        if (!v.startsWith('data:image')) {
+            slog('generate: ' + name + ' bind len=' + v.length + (v ? ' head=' + v.slice(0, 24) : ' (EMPTY)'));
+            return;
+        }
+        var img = new Image();
+        img.onload = function () {
+            try {
+                var cc = document.createElement('canvas'); cc.width = 16; cc.height = 16;
+                var g = cc.getContext('2d'); g.drawImage(img, 0, 0, 16, 16);
+                var d = g.getImageData(0, 0, 16, 16).data;
+                var s = [0, 0, 0, 0];
+                for (var i = 0; i < d.length; i += 4) { s[0] += d[i]; s[1] += d[i + 1]; s[2] += d[i + 2]; s[3] += d[i + 3]; }
+                var n = d.length / 4;
+                slog('generate: ' + name + ' bind ' + img.width + 'x' + img.height + ' len=' + v.length +
+                     ' meanRGBA=' + s.map(function (x) { return Math.round(x / n); }).join(','));
+                shipLog();
+            } catch (e) { slog('generate: ' + name + ' bind decode stats failed: ' + e); shipLog(); }
+        };
+        img.onerror = function () { slog('generate: ' + name + ' bind data URL FAILED to decode (len=' + v.length + ')'); shipLog(); };
+        img.src = v;
+    }
+
+    document.addEventListener('click', function (ev) {
+        var btn = ev.target && ev.target.closest ? ev.target.closest('button[id$="_generate"]') : null;
+        if (!btn || btn.id.indexOf('img2img') === -1) return;
+        try {
+            var app = (typeof gradioApp === 'function') ? gradioApp() : document;
+            var panes = app.querySelectorAll('#mode_img2img div.tabitem');
+            for (var i = 0; i < panes.length; i++) {
+                var pane = panes[i];
+                var dc = pane.querySelector('canvas[id^=drawingCanvas_]');
+                if (!dc || !dc.offsetParent) continue;   // not the visible pane
+                var uuid = dc.id.replace('drawingCanvas_', '');
+                slog('generate clicked: visible pane ' + (pane.id || i) + ' canvas ' + dc.width + 'x' + dc.height);
+                snapshotBind(app.querySelector('.logical_image_background[id="' + uuid + '"] textarea'), 'background');
+                snapshotBind(app.querySelector('.logical_image_foreground[id="' + uuid + '"] textarea'), 'foreground');
+            }
+            shipLog();
+        } catch (e) { /* forensics must never break generate */ }
+    }, true);
+
     // ---- server-restart detection -------------------------------------------
     // A restart is NOT a blip: this page's gradio session died with the old
     // process, so progress events freeze mid-run and new submits misbehave in
