@@ -454,15 +454,21 @@ function selectVAE(vae) {
 }
 
 function currentImg2imgSourceResolution(w, h, r) {
-    // gradio 6 renders the active img2img sub-tab panel with an inline
-    // `display: flex;` (inactive ones get `display: none;`), so the old
-    // `div[style="display: block;"]` match found nothing and this returned
-    // [0, 0] -- which is what set width/height to 0. Select the visible
-    // tabitem instead (anything not explicitly display:none) and read the
-    // ForgeCanvas background <img> inside it; the <img> comes before the
-    // drawing <canvas> in the DOM, so :is(img, canvas) picks the real image.
-    var img = gradioApp().querySelector('#mode_img2img > div.tabitem:not([style*="display: none"]) :is(img, canvas)');
-    return img ? [img.naturalWidth || img.width, img.naturalHeight || img.height, r] : [0, 0, r];
+    // Read the source image dimensions from whichever img2img sub-tab is
+    // actually visible. Style-based matching is a trap here: a never-visited
+    // pane has NO inline style, so `:not([style*="display: none"])` matched it
+    // and its empty 0-width canvas shadowed the real image in a later pane
+    // ("no image selected" on Resize by from the Inpaint tab). offsetParent is
+    // the ground truth for visibility, and skipping <=1px elements ignores the
+    // ForgeCanvas placeholder canvases (initialized at width=1).
+    var candidates = gradioApp().querySelectorAll('#mode_img2img div.tabitem :is(img, canvas)');
+    for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        if (!el.offsetParent) continue;
+        var cw = el.naturalWidth || el.width, ch = el.naturalHeight || el.height;
+        if (cw > 1 && ch > 1) return [cw, ch, r];
+    }
+    return [0, 0, r];
 }
 
 function updateImg2imgResizeToTextAfterChangingImage() {
