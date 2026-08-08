@@ -80,7 +80,14 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
                         value=True, elem_id="replacer_fix_steps")
 
                 with gr.Row():
-                    comp.distilled_cfg_scale = gr.Slider(label='Distilled CFG Scale (Flux only)', visible=(_mp().get("_mode", "flux") == "flux"),
+                    # Main tab: ALWAYS mounted; replacer_flux_slider.js toggles its
+                    # visibility live off the mode radio (gradio wiring is impossible
+                    # here -- this builds in on_before_ui, before the radio exists,
+                    # and a visible=False build would be UNMOUNTED under gradio 6 so
+                    # JS could not summon it back). Dedicated page keeps the
+                    # build-time gate (no radio there; rebuilt fresh per load).
+                    comp.distilled_cfg_scale = gr.Slider(label='Distilled CFG Scale (Flux only)',
+                        visible=(True if not isDedicatedPage else (_mp().get("_mode", "flux") == "flux")),
                         info='Flux guidance strength. Higher (35-50) = follows your prompt and mask edges harder with more contrast, but can oversaturate or look baked-in. Lower (10-20) = softer, more natural blend that may drift from the prompt. Default 30. No effect in SD/SDXL modes.',
                         value=_envdef('REPLACER_FLUX_GUIDANCE', 30.0), elem_id="replacer_distilled_cfg_scale",
                         minimum=1.0, maximum=60.0, step=0.5)
