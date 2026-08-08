@@ -1274,6 +1274,7 @@ def setup_ui_api(app):
         # "generating" forever on an idle server; the watchdog uses this to
         # detect that orphaned state and reset the controls.
         from modules import progress
+        progress.reap_stale_pending_tasks()
         return {"boot_id": boot_id, "busy": progress.current_task is not None or bool(progress.pending_tasks)}
 
     app.add_api_route("/internal/ping", _ping, methods=["GET"])

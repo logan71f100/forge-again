@@ -51,7 +51,22 @@ def record_results(id_task, res):
 
 
 def add_task_to_queue(id_job):
+    reap_stale_pending_tasks()
     pending_tasks[id_job] = time.time()
+
+
+def reap_stale_pending_tasks(max_age=600):
+    """Drop pending tasks that never started. A queue join whose gradio session
+    died (dead SSE stream, page reload mid-join) leaves its entry here forever:
+    the job is silently lost AND anything reading pending_tasks as a 'busy'
+    signal (the connection watchdog's /internal/ping) wedges permanently busy.
+    Observed live: a join produced heartbeats but no process_starts, then its
+    stream vanished -- its pending entry never cleared."""
+    now = time.time()
+    stale = [(tid, t) for tid, t in pending_tasks.items() if now - t > max_age and tid != current_task]
+    for tid, t in stale:
+        pending_tasks.pop(tid, None)
+        print(f"[progress] reaped stale pending task {tid} (queued {now - t:.0f}s ago, never started)")
 
 class PendingTasksResponse(BaseModel):
     size: int = Field(title="Pending task size")

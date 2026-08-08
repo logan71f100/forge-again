@@ -265,12 +265,36 @@ def checkpoint_change(ckpt_name:str, save=True, refresh=True):
 
 def modules_change(module_values:list, save=True, refresh=True) -> bool:
     """ module values may be provided as file paths, or just the module names. Returns True if modules changed. """
+    # MODE GUARD: the flux trio (ae/clip_l/t5xxl) is resolvable from every mode
+    # because --vae-dir/--text-encoder-dir point at the shared dirs -- so a stale
+    # flux-era dropdown value (session restore, gradio-6 remount, unordered
+    # queue=False event) could write flux modules into an sd/xl config. That
+    # loads flux's 16-channel VAE into an SD/XL model: garbage/white decodes at
+    # best, 'size mismatch for IntegratedAutoencoderKL' at worst.
+    flux_only = set()
+    try:
+        sm = _load_set_mode()
+        flux_only = {os.path.basename(p).lower() for p in sm.MODELS['flux']['mods']}
+    except Exception:
+        pass
+    is_flux = getattr(shared.opts, 'forge_preset', 'xl') == 'flux'
     modules = []
     for v in module_values:
         module_name = os.path.basename(v) # If the input is a filepath, extract the file name
+        if not is_flux and module_name.lower() in flux_only:
+            print(f'[modules] dropping flux-only module {module_name!r} (current mode is {getattr(shared.opts, "forge_preset", "?")})')
+            continue
         if module_name in module_list:
             modules.append(module_list[module_name])
     
+    # Symmetric stale-event protection: flux cannot run without its modules at
+    # all, so an event that would CLEAR a non-empty flux module list is always
+    # a stale replay (xl-era dropdown value arriving after a switch into flux),
+    # never a valid user action. Selecting different non-empty values still works.
+    if is_flux and not modules and shared.opts.data.get('forge_additional_modules'):
+        print('[modules] ignoring empty module list in flux mode (stale event; flux requires ae + text encoders)')
+        return False
+
     # skip further processing if value unchanged
     if sorted(modules) == sorted(shared.opts.data.get('forge_additional_modules', [])):
         return False
