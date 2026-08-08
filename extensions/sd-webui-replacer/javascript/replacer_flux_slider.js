@@ -27,4 +27,18 @@
     }, true);
     if (typeof onAfterUiUpdate === 'function') onAfterUiUpdate(sync);
     else if (typeof onUiLoaded === 'function') onUiLoaded(sync);
+
+    // Quick-add LoRA chips: single delegated listener for ALL chips (they are
+    // plain HTML buttons with data-lora, deliberately NOT gradio events — see
+    // make_advanced_options.py). Delegation cannot double-fire across gradio 6
+    // remounts, and exactly one chip matches any click.
+    document.addEventListener('click', function (ev) {
+        var chip = ev.target && ev.target.closest ? ev.target.closest('.replacer-lora-chip') : null;
+        if (!chip) return;
+        var name = chip.getAttribute('data-lora');
+        var ta = gradioApp().querySelector('#replacer_positivePrompt textarea');
+        if (!name || !ta) return;
+        ta.value += ' <lora:' + name + ':1>';
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }, true);
 })();

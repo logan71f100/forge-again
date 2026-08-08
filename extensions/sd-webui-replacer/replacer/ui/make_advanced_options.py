@@ -118,9 +118,17 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
                 with gr.Row():
                     gr.HTML("<b>Quick-add LoRA</b> (" + _qmode + " mode) - click to append to the positive prompt")
                 with gr.Row(elem_id="replacer_quick_loras"):
-                    for _qln in _qloras:
-                        _qjs = "() => {var t=document.querySelector('#replacer_positivePrompt textarea'); if(t){t.value += ' <lora:" + _qln + ":1>'; t.dispatchEvent(new Event('input', {bubbles:true}));}}"
-                        gr.Button("+ " + _qln, size="sm").click(None, js=_qjs)
+                    # Plain HTML chips + ONE delegated DOM listener
+                    # (replacer_flux_slider.js) instead of a gradio js-only
+                    # click dep per button: a long-lived gradio-6 page can
+                    # re-bind dep listeners across remounts/reconnects, and one
+                    # click then fired EVERY chip's handler (all loras appended
+                    # at once). A delegated listener cannot multiply.
+                    import html as _qhtml
+                    _qchips = "".join(
+                        "<button type='button' class='replacer-lora-chip' data-lora=\"{0}\">+ {0}</button>".format(_qhtml.escape(_qln, quote=True))
+                        for _qln in _qloras)
+                    gr.HTML("<div class='replacer-lora-chip-row'>" + _qchips + "</div>")
 
                 with gr.Row():
                     with gr.Column(elem_id="replacer_width_height_column", elem_classes="replacer-generation-size"):
