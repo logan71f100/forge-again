@@ -118,6 +118,25 @@ function setupExtraNetworksForTab(tabname) {
                 else if (UIresult == 2) {   //  'flux'
                     if (sdversion != 'SdVersion.Flux')  visible = false;
                 }
+
+                // Directory-based mode filter: metadata sdversion detection is
+                // 'Unknown' for most modern loras (chroma, flux extractions),
+                // which the block above always lets through -- so the Lora tab
+                // showed every mode's files. The models/Lora/{sd,xl,flux}/
+                // layout is the reliable signal: a card living in a mode dir is
+                // hidden outside that mode. Root-level cards always show, and a
+                // search that explicitly names a mode dir (typed, or the folder
+                // buttons) overrides the filter so other modes stay reachable.
+                if (visible && UIresult != 3 && !(opts.lora_filter_disabled == True)) {
+                    // paths in search_terms use OS separators (Lora\flux\... on
+                    // Windows) -- accept both slashes around the mode dir
+                    var searchNamesModeDir = /(?:^|[\s\\/])(sd|xl|flux)[\\/]/.test(searchTerm);
+                    if (!searchNamesModeDir) {
+                        var cardModeMatch = text.match(/(?:^|[\s\\/])(sd|xl|flux)[\\/]/);
+                        var presetName = ['sd', 'xl', 'flux'][UIresult];
+                        if (cardModeMatch && cardModeMatch[1] !== presetName) visible = false;
+                    }
+                }
                 
                 if (visible) {
                     elem.classList.remove("hidden");
@@ -822,3 +841,13 @@ onAfterUiUpdate(function() {
     setupExtraNetworksForTab('txt2img');
     setupExtraNetworksForTab('img2img');
 });
+
+// Re-run every page's filter when the mode radio changes, so the Lora tab's
+// mode-directory filter follows sd/xl/flux switches live (delegated listener:
+// survives gradio 6 remounts).
+document.addEventListener('change', function(ev) {
+    if (!ev.target || !ev.target.matches || !ev.target.matches('#forge_ui_preset input[type=radio]')) return;
+    Object.keys(extraNetworksApplyFilter).forEach(function(k) {
+        if (typeof extraNetworksApplyFilter[k] === 'function') extraNetworksApplyFilter[k](true);
+    });
+}, true);
