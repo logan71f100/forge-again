@@ -130,7 +130,7 @@
     // top-level sub-tabs (img2img vs inpaint vs batch) must stay excluded, but
     // unit tabs nested inside an accordion (ControlNet Unit 0/1/2) are included.
     function scannable(el) {
-        if (!el || el.closest('#fai-panel')) return false;
+        if (!el || el.closest('#fai-panel') || el.closest('.fai-profile-row')) return false;
         if (visible(el)) return true;
         let n = el.parentElement;
         while (n && n !== document.body) {
@@ -250,8 +250,8 @@
 
     // Builds a registry of every visible input on the current tab:
     // sliders, number fields, textareas, dropdowns, checkboxes, radio groups.
-    function scanControls() {
-        const root = activeTabRoot();
+    function scanControls(rootOverride) {
+        const root = rootOverride || activeTabRoot();
         const controls = [];
         const seenBlocks = new Set();
         const seenLabels = {};
@@ -2024,6 +2024,27 @@
                 const st = [...activeTabRoot().querySelectorAll('.tab-nav button.selected, [role=tab][aria-selected="true"]')].find(visible);
                 if (st) snap['__subtab'] = st.textContent.trim();
             } catch (e) { /* no sub-tabs here */ }
+            // Quicksettings (Checkpoint / VAE / Clip skip / mode radio) live
+            // OUTSIDE every tab, so the per-tab scan above never captures them --
+            // restore could not change the model back. Capture them under a
+            // pseudo-tab; applyUiSnapshots applies it FIRST (the model decides
+            // which other controls even exist).
+            try {
+                const qsRoot = gradioApp().querySelector('#quicksettings');
+                if (qsRoot) {
+                    const qsnap = {};
+                    for (const c of scanControls(qsRoot)) {
+                        try {
+                            const v = c.get();
+                            if (typeof v === 'string' && (v.length > 1500 || v.startsWith('data:'))) continue;
+                            qsnap[c.label] = v;
+                        } catch (e) { /* unreadable */ }
+                    }
+                    if (Object.keys(qsnap).length) {
+                        uiSnapshots['__quicksettings'] = Object.assign({}, uiSnapshots['__quicksettings'] || {}, qsnap);
+                    }
+                }
+            } catch (e) { /* quicksettings not mounted */ }
             if (Object.keys(snap).length) {
                 // MERGE over the previous snapshot instead of replacing it: gradio 6
                 // unmounts the contents of closed accordions (gradio 4 kept them in
@@ -2041,12 +2062,15 @@
         let applied = 0, failed = 0;
         const unmatched = [];
         const expandedAccordions = new Set();   // one expand-click per accordion per restore
-        for (const tab of Object.keys(snaps || {})) {
+        const tabOrder = Object.keys(snaps || {}).sort((a, b) =>
+            (a === '__quicksettings' ? -1 : b === '__quicksettings' ? 1 : 0));
+        for (const tab of tabOrder) {
             setActivity('↺ restoring settings on "' + tab + '"…');
             const pending = new Map(Object.entries(snaps[tab]));
             const subtab = pending.get('__subtab');
             pending.delete('__subtab');
-            const err = await switchTab(tab);
+            const isQS = (tab === '__quicksettings');
+            const err = isQS ? null : await switchTab(tab);
             if (err) { failed += pending.size; continue; }
             if (subtab) await switchTab(null, subtab);   // best-effort — apply what's visible either way
             await sleep(300);
@@ -2064,7 +2088,7 @@
                 .replace(/\[[^\]]*\]/g, '').replace(/\d+\s*units?/g, '').replace(/\s+/g, ' ').trim();
             const clickedTabs = new Set();   // one click per inner tab per restore
             for (let pass = 1; pass <= 10 && pending.size; pass++) {
-                const controls = scanControls();
+                const controls = scanControls(isQS ? gradioApp().querySelector('#quicksettings') : undefined);
                 const normMap = new Map();
                 for (const x of controls) {
                     const n = normLabel(x.label);
