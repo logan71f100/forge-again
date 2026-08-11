@@ -131,7 +131,21 @@ class VAE:
 
         try:
             memory_used = self.memory_used_decode(samples_in.shape, self.vae_dtype)
-            memory_management.load_models_gpu([self.patcher], memory_required=memory_used)
+            # The worst-case decode estimate is enormous (~9 GB for a 1 MP fp32
+            # decode: 2178*h*w*64*dtype). Passing it wholesale as memory_required
+            # made load_models_gpu EVICT THE DIFFUSION MODEL at the end of every
+            # run just to decode one image; the next run then paid a full weight
+            # reload ("Moving model(s)" every run) or sampled partially
+            # CPU-swapped at ~10 s/it. When other models are resident, request
+            # only the actual headroom: the VAE weights still load (the
+            # minimum-inference floor covers them), the decode batch size below
+            # adapts to real free memory, and a genuine shortfall lands in the
+            # existing tiled-decode fallback instead of nuking resident weights.
+            request = memory_used
+            if memory_management.current_loaded_models:
+                free_now = memory_management.get_free_memory(self.device)
+                request = min(memory_used, max(0, free_now - (1024 * 1024 * 1024)))
+            memory_management.load_models_gpu([self.patcher], memory_required=request)
             free_memory = memory_management.get_free_memory(self.device)
             batch_number = int(free_memory / memory_used)
             batch_number = max(1, batch_number)
