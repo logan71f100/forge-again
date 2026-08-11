@@ -309,6 +309,90 @@ def check_error_tips() -> None:
         record("error-tips: known errors produce tips", PASS, f"{len(cases)} patterns + unknown-negative")
 
 
+def check_generation_hints() -> None:
+    """generation_hints rules/one-offs and error_tips.register_tip stay usable.
+
+    Pure-import unit checks (fresh module instances, so registering junk here
+    never leaks into a running server)."""
+    import importlib.util
+
+    def load(name):
+        spec = importlib.util.spec_from_file_location(name, os.path.join(ROOT, "modules", f"{name}.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    try:
+        gh = load("generation_hints")
+    except Exception as e:
+        record("hints: generation_hints imports", FAIL, f"{type(e).__name__}: {e}")
+        return
+
+    class FakeP:
+        def __init__(self, prompt="", cfg_scale=1.0, steps=8):
+            self.prompt, self.cfg_scale, self.steps = prompt, cfg_scale, steps
+            self.comments = {}
+        def comment(self, text):
+            self.comments[text] = 1
+
+    problems = []
+
+    # one-off add() lands in comments
+    p = FakeP()
+    gh.add(p, "one-off hint")
+    if "one-off hint" not in p.comments:
+        problems.append("add() did not land in p.comments")
+
+    # flash rule: fires on flash tag + bad settings, stays quiet otherwise
+    p = FakeP(prompt="x <lora:my-flash-thing:1>", cfg_scale=4.0, steps=26)
+    gh.run_rules(p)
+    if not any("flash" in c.lower() for c in p.comments):
+        problems.append("flash rule did not fire on flash tag + CFG 4 + 26 steps")
+    p = FakeP(prompt="x <lora:my-flash-thing:1>", cfg_scale=1.0, steps=12)
+    gh.run_rules(p)
+    if p.comments:
+        problems.append(f"flash rule fired on CLEAN flash settings: {list(p.comments)}")
+    p = FakeP(prompt="no loras here", cfg_scale=7.0, steps=30)
+    gh.run_rules(p)
+    if p.comments:
+        problems.append(f"flash rule fired without a flash tag: {list(p.comments)}")
+
+    # a broken rule must not break the run or suppress other rules
+    @gh.rule
+    def _exploding_rule(p):  # noqa: ANN001
+        raise RuntimeError("boom")
+    @gh.rule
+    def _working_rule(p):  # noqa: ANN001
+        return "survivor hint"
+    p = FakeP()
+    try:
+        gh.run_rules(p)
+    except Exception as e:
+        problems.append(f"run_rules raised through a broken rule: {e}")
+    if "survivor hint" not in p.comments:
+        problems.append("a broken rule suppressed later rules")
+
+    # error_tips.register_tip: string tip, callable tip, field round-trip
+    try:
+        et = load("error_tips")
+        et.register_tip(r"HarnessProbeError: (\d+)", "static tip text", "#{tab}_probe")
+        tip, field = et.tip_and_field_for("HarnessProbeError: 42")
+        if tip != "static tip text" or field != "#{tab}_probe":
+            problems.append(f"register_tip string form broken: {tip!r}, {field!r}")
+        et.register_tip(r"HarnessCallable: (\w+)", lambda m: f"saw {m.group(1)}")
+        tip2 = et.tip_for("HarnessCallable: hello")
+        if tip2 != "saw hello":
+            problems.append(f"register_tip callable form broken: {tip2!r}")
+    except Exception as e:
+        problems.append(f"error_tips.register_tip failed: {type(e).__name__}: {e}")
+
+    if problems:
+        record("hints: rules, one-offs and register_tip", FAIL, "\n         ".join(problems[:6]))
+    else:
+        record("hints: rules, one-offs and register_tip", PASS,
+               "add + flash rule (fire/quiet/no-tag) + broken-rule isolation + register_tip x2")
+
+
 def check_downloader_file_safety() -> None:
     """Move/delete must not escape their folder or clobber existing files."""
     try:
@@ -993,6 +1077,31 @@ def check_gpu_generation() -> None:
                     record("gpu: img2img round-trip", PASS)
             except Exception as e:
                 record("gpu: img2img round-trip", FAIL, str(e)[:200])
+
+            # --- generation hints reach the API ------------------------------
+            # modules/generation_hints.py rules attach plain-language notices to
+            # the run; Processed.js() exports them as info['comments'] so the UI
+            # (under the result) and API callers both see them. The flash-LoRA
+            # rule fires on the TAG alone (the file need not exist), so this is
+            # cheap to trigger deliberately: flash tag + CFG>1 must produce a
+            # hint mentioning 'flash'.
+            try:
+                r7 = s.post("/sdapi/v1/txt2img", dict(
+                    base, width=256, height=256, steps=4, cfg_scale=4.0,
+                    prompt="test <lora:harness-flash-probe:1>"))
+                info = json.loads(r7.get("info") or "{}")
+                comments = info.get("comments")
+                if comments is None:
+                    record("gpu: generation hints exported in info", FAIL,
+                           "info json has no 'comments' key -- Processed.js() export missing")
+                elif "flash" not in str(comments).lower():
+                    record("gpu: generation hints exported in info", FAIL,
+                           f"flash-LoRA hint did not fire; comments={str(comments)[:120]!r}")
+                else:
+                    record("gpu: generation hints exported in info", PASS,
+                           "flash rule fired, comments in info json")
+            except Exception as e:
+                record("gpu: generation hints exported in info", FAIL, str(e)[:200])
 
             # --- DeepBooru interrogate returns tags --------------------------
             # The interrogators sit on a different stack (their own model loaders
@@ -1914,6 +2023,7 @@ CHECKS = {
         ("pins", check_pins_hold),
         ("classify", check_downloader_classification),
         ("error-tips", check_error_tips),
+        ("hints", check_generation_hints),
         ("filesafety", check_downloader_file_safety),
         ("dl-e2e", check_download_end_to_end),
         ("json", check_json_and_bom),
