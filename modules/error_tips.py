@@ -88,6 +88,20 @@ TIPS = [
 ]
 
 
+def register_tip(pattern, tip, field=None):
+    """Public registration for extensions and other modules.
+
+    pattern: regex string or compiled pattern matched against the raw error.
+    tip:     plain string, or a callable receiving the regex match.
+    field:   optional CSS selector for the responsible control ('{tab}' is
+             resolved client-side to the active tab by errorHighlight.js).
+    """
+    if isinstance(pattern, str):
+        pattern = re.compile(pattern)
+    builder = tip if callable(tip) else (lambda m, _t=tip: _t)
+    TIPS.append((pattern, builder, field))
+
+
 def tip_and_field_for(error_message: str) -> tuple[str | None, str | None]:
     """Return (tip, field selector) for a raw error message; (None, None) if unknown."""
     if not error_message:

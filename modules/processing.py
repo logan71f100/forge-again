@@ -618,6 +618,9 @@ class Processed:
             "clip_skip": self.clip_skip,
             "is_using_inpainting_conditioning": self.is_using_inpainting_conditioning,
             "version": self.version,
+            # hints/warnings shown under the result in the UI; exported so API
+            # callers (and the AI assistant) see them too
+            "comments": self.comments,
         }
 
         return json.dumps(obj, default=lambda o: None)
@@ -908,6 +911,9 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
         if est_mb > user_mb:
             print(f'[Memory] Raising inference reserve to {est_mb} MB for this run '
                   f'({p.width}x{p.height}, batch {p.batch_size}) -- the GPU Weights slider reserves only {user_mb:.0f} MB.')
+            from modules import generation_hints
+            generation_hints.add(p, f'Hint: the inference reserve was raised to {est_mb} MB for this run '
+                                    f'(large resolution/batch); fewer model weights stay on the GPU, so it may run slower than usual.')
 
         # load/reload model and manage prompt cache as needed
         if getattr(p, 'txt2img_upscale', False):
@@ -1236,6 +1242,11 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
         extra_networks.deactivate(p, p.extra_network_data)
 
     devices.torch_gc()
+
+    # evaluate registered generation hints (modules/generation_hints.py) so
+    # they land in p.comments before the result is assembled below
+    from modules import generation_hints
+    generation_hints.run_rules(p)
 
     res = Processed(
         p,
