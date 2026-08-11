@@ -17,19 +17,6 @@
 
     var online = true;
     var everConnected = false;
-    var banner = null;
-
-    function ensureBanner() {
-        if (banner) return banner;
-        banner = document.createElement('div');
-        banner.id = 'fa-conn-banner';
-        banner.style.cssText =
-            'position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:99999;' +
-            'padding:6px 18px;border-radius:0 0 8px 8px;font:600 13px/1.5 sans-serif;' +
-            'box-shadow:0 2px 8px rgba(0,0,0,.35);display:none;pointer-events:none;';
-        (document.body || document.documentElement).appendChild(banner);
-        return banner;
-    }
 
     function recoverStuckUI(fullCleanup) {
         // Backend is reachable again — clear any stuck "Queued…" placeholder and
@@ -76,24 +63,17 @@
         if (idleStrikes < 4) return;                             // ~16s of disagreement
         idleStrikes = 0;
         recoverStuckUI(true);
-        var b = ensureBanner();
-        b.textContent = '⚠ Lost the generation connection — controls reset. If the run finished, the image is in your output folder.';
-        b.style.background = '#b7791f'; b.style.color = '#fff'; b.style.display = 'block';
-        setTimeout(function () { if (online) b.style.display = 'none'; }, 6000);
+        forgeNotify.warn('⚠ Lost the generation connection — controls reset. If the run finished, the image is in your output folder.', { id: 'fa-orphan', timeout: 8000 });
     }
 
     function setOnline(nowOnline) {
         if (nowOnline) everConnected = true;
         if (nowOnline === online) return;
         online = nowOnline;
-        var b = ensureBanner();
         if (!online) {
-            b.textContent = '⚠ Lost connection to the server — reconnecting…';
-            b.style.background = '#c0392b'; b.style.color = '#fff'; b.style.display = 'block';
+            forgeNotify.error('⚠ Lost connection to the server — reconnecting…', { id: 'fa-conn', timeout: 0 });
         } else if (everConnected) {
-            b.textContent = '✓ Reconnected';
-            b.style.background = '#1f9d55'; b.style.color = '#fff'; b.style.display = 'block';
-            setTimeout(function () { if (online) b.style.display = 'none'; }, 2500);
+            forgeNotify.success('✓ Reconnected', { id: 'fa-conn', timeout: 2500 });
             recoverStuckUI();
         }
     }
@@ -189,10 +169,7 @@
     function streamDied(kind, seconds) {
         slog('queue stream ' + kind + ' after ' + seconds + 's');
         if (!uiLooksGenerating()) return;
-        var b = ensureBanner();
-        b.textContent = '⚠ Generation stream ' + kind + ' after ' + seconds + 's — the run continues server-side; result lands in the output folder.';
-        b.style.background = '#b7791f'; b.style.color = '#fff'; b.style.display = 'block';
-        setTimeout(function () { if (online) b.style.display = 'none'; }, 8000);
+        forgeNotify.warn('⚠ Generation stream ' + kind + ' after ' + seconds + 's — the run continues server-side; result lands in the output folder.', { id: 'fa-stream', timeout: 8000 });
     }
 
     var origFetch = window.fetch;
@@ -344,9 +321,7 @@
         if (sessionStorage.getItem('fa-reloaded-for') === newBootId) return;   // already reloaded once for this boot
         sessionStorage.setItem('fa-reloaded-for', newBootId);
         savePrompts();
-        var b = ensureBanner();
-        b.textContent = '↻ Server restarted — reloading the UI…';
-        b.style.background = '#b7791f'; b.style.color = '#fff'; b.style.display = 'block';
+        forgeNotify.warn('↻ Server restarted — reloading the UI…', { id: 'fa-conn', timeout: 0 });
         setTimeout(function () { location.reload(); }, 800);
     }
 

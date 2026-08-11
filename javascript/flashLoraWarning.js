@@ -27,33 +27,15 @@
         } catch (e) { /* storage unavailable */ }
     }
 
-    var dialog = null;
     function showDialog(msg, onApply, onRunAsIs) {
-        if (dialog) dialog.remove();
-        dialog = document.createElement('div');
-        dialog.id = 'flash-lora-warning';
-        dialog.style.cssText =
-            'position:fixed;top:44px;left:50%;transform:translateX(-50%);z-index:99998;' +
-            'padding:12px 20px;border-radius:8px;font:600 13px/1.6 sans-serif;' +
-            'background:#b7791f;color:#fff;box-shadow:0 2px 12px rgba(0,0,0,.45);' +
-            'max-width:80%;text-align:center;';
-        var text = document.createElement('div');
-        text.textContent = msg;
-        var row = document.createElement('div');
-        row.style.cssText = 'margin-top:10px;display:flex;gap:10px;justify-content:center;';
-        var mk = function (label, fn, primary) {
-            var b = document.createElement('button');
-            b.textContent = label;
-            b.style.cssText = 'padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font:600 13px sans-serif;' +
-                (primary ? 'background:#fff;color:#7a4f12;' : 'background:rgba(255,255,255,.25);color:#fff;');
-            b.addEventListener('click', function () { dialog.remove(); dialog = null; fn(); });
-            return b;
-        };
-        row.appendChild(mk('⚡ Apply flash settings & run', onApply, true));
-        row.appendChild(mk('Run as is', onRunAsIs, false));
-        dialog.appendChild(text);
-        dialog.appendChild(row);
-        (document.body || document.documentElement).appendChild(dialog);
+        forgeNotify.warn(msg, {
+            id: 'flash-lora',
+            timeout: 0,
+            buttons: [
+                { label: '⚡ Apply flash settings & run', primary: true, onClick: onApply },
+                { label: 'Run as is', onClick: onRunAsIs },
+            ],
+        });
     }
 
     function num(sel) {
