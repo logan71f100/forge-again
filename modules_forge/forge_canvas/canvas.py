@@ -28,7 +28,8 @@ import base64
 import gradio as gr
 import numpy as np
 
-from PIL import Image
+import tempfile
+from PIL import Image, ImageOps
 from io import BytesIO
 from gradio.context import Context
 from functools import wraps
@@ -79,6 +80,56 @@ def base64_to_image(base64_str, numpy=True):
     return image_array
 
 
+# ---- file-based transport ----------------------------------------------------
+# LogicalImage historically moved WHOLE IMAGES as base64 text through a hidden
+# gr.Textbox, in both directions. A 24MP phone photo becomes a ~34MB string
+# that rides inside EVERY submit payload listing the canvas as an input, and
+# inside SSE events whenever the server pushes an image (send-to-inpaint) --
+# measured as the correlate of queue-stream stalls and orphaned joins. The
+# transport is now file-based: the client uploads the canvas PNG via gradio's
+# /gradio_api/upload and sends a small 'forge-file:<path>' marker; the server
+# replies with a '/gradio_api/file=<path>' URL the canvas can use directly as
+# an image src. Base64 stays accepted both ways as the fallback.
+
+FORGE_FILE_PREFIX = 'forge-file:'
+FILE_URL_MARKER = '/gradio_api/file='
+
+_canvas_temp_dir = None
+
+
+def _get_canvas_temp_dir():
+    global _canvas_temp_dir
+    if _canvas_temp_dir is None:
+        _canvas_temp_dir = os.path.join(tempfile.gettempdir(), 'gradio', 'forge-canvas')
+        os.makedirs(_canvas_temp_dir, exist_ok=True)
+    return _canvas_temp_dir
+
+
+def _allowed_marker_dirs():
+    # markers are CLIENT-CONTROLLED text: only ever open files that gradio's
+    # upload endpoint or our own postprocess produced, never arbitrary paths
+    dirs = [os.path.join(tempfile.gettempdir(), 'gradio')]
+    env_tmp = os.environ.get('GRADIO_TEMP_DIR')
+    if env_tmp:
+        dirs.append(env_tmp)
+    return [os.path.realpath(d) for d in dirs]
+
+
+def _marker_to_path(payload):
+    """Extract and validate a filesystem path from a transport marker, or None."""
+    if payload.startswith(FORGE_FILE_PREFIX):
+        path = payload[len(FORGE_FILE_PREFIX):]
+    elif FILE_URL_MARKER in payload:
+        path = payload.split(FILE_URL_MARKER, 1)[1]
+    else:
+        return None
+    path = os.path.realpath(path.strip())
+    if not any(path.startswith(d + os.sep) or path == d for d in _allowed_marker_dirs()):
+        print(f'[forge-canvas] rejecting marker outside gradio temp dirs: {path[:120]}')
+        return None
+    return path if os.path.isfile(path) else None
+
+
 class LogicalImage(gr.Textbox):
     @wraps(gr.Textbox.__init__)
     def __init__(self, *args, numpy=True, **kwargs):
@@ -98,23 +149,52 @@ class LogicalImage(gr.Textbox):
         if not isinstance(payload, str):
             return None
 
-        if not payload.startswith("data:image/png;base64,"):
-            return None
+        if payload.startswith("data:image/png;base64,"):
+            image = base64_to_image(payload, numpy=self.numpy)
+        else:
+            path = _marker_to_path(payload)
+            if path is None:
+                return None
+            try:
+                pil = Image.open(path)
+                pil = ImageOps.exif_transpose(pil)
+                pil = pil.convert("RGBA")
+            except Exception as e:
+                print(f'[forge-canvas] failed to read marker file: {e}')
+                return None
+            image = np.array(pil) if self.numpy else pil
 
-        image = base64_to_image(payload, numpy=self.numpy)
         if hasattr(image, 'info'):
             image.info = self.infotext
-        
+
         return image
 
     def postprocess(self, value):
         if value is None:
             return None
-            
+
         if hasattr(value, 'info'):
             self.infotext = value.info
 
-        return image_to_base64(value, numpy=self.numpy)
+        # write a temp PNG and hand the client a servable URL instead of ~MBs
+        # of base64 through the event stream; fall back to base64 on any error
+        try:
+            image = Image.fromarray(value) if self.numpy else value
+            image = image.convert("RGBA")
+            fd, path = tempfile.mkstemp(suffix='.png', dir=_get_canvas_temp_dir())
+            with os.fdopen(fd, 'wb') as f:
+                image.save(f, format='PNG')
+            try:
+                from modules import shared
+                from modules.ui_tempdir import register_tmp_file
+                if getattr(shared, 'demo', None) is not None:
+                    register_tmp_file(shared.demo, path)
+            except Exception:
+                pass
+            return FILE_URL_MARKER + path.replace('\\', '/')
+        except Exception as e:
+            print(f'[forge-canvas] file postprocess failed ({e}); falling back to base64')
+            return image_to_base64(value, numpy=self.numpy)
 
     def get_block_name(self):
         return "textbox"
