@@ -18,7 +18,12 @@ current_task = None
 pending_tasks = OrderedDict()
 finished_tasks = []
 recorded_results = []
-recorded_results_limit = 2
+# Raised from 2: this is the backing store for missed-result recovery
+# (connectionWatchdog clicks restore-progress after a lost completion). At 2, a
+# couple of runs after the lost one evicted its result before the user returned
+# to the tab, so recovery found nothing. The entries are (id, result-tuple)
+# references, not image copies -- keeping more is cheap.
+recorded_results_limit = 16
 
 
 def start_task(id_task):

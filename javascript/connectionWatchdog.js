@@ -57,10 +57,27 @@
             if (typeof forgeNotify !== 'undefined') {
                 forgeNotify.info('↺ Recovering the finished image…', { id: 'fa-recover', timeout: 5000 });
             }
+            var app = (typeof gradioApp === 'function') ? gradioApp() : document;
+            var gallery = app.querySelector('#' + tab + '_gallery');
+            var hadImg = !!(gallery && gallery.querySelector('img'));
             btn.click();
             // one shot: recorded results die with the server anyway, and a
             // lingering id would re-trigger on every later page load
             try { localStorage.removeItem(tab + '_task_id'); } catch (e2) { }
+            // confirm it actually delivered -- restore_progress returns a
+            // "results discarded" message (no image) when the server has
+            // already evicted this task's result. Tell the user plainly instead
+            // of leaving a "recovering..." toast that did nothing.
+            setTimeout(function () {
+                var nowImg = !!(gallery && gallery.querySelector('img'));
+                if (nowImg && !hadImg) {
+                    slog('recovery delivered an image for ' + tab);
+                    if (typeof forgeNotify !== 'undefined') forgeNotify.success('✓ Recovered the finished image', { id: 'fa-recover', timeout: 3000 });
+                } else if (!nowImg) {
+                    slog('recovery found no stored result for ' + tab + ' (server evicted it)');
+                    if (typeof forgeNotify !== 'undefined') forgeNotify.warn('The finished image is in your output folder — the live result was already cleared from the server.', { id: 'fa-recover', timeout: 7000 });
+                }
+            }, 4000);
         });
     }
 
