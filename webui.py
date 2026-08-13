@@ -85,7 +85,21 @@ def webui_worker():
         startup_timer.record("create ui")
 
         if not cmd_opts.no_gradio_queue:
-            shared.demo.queue(64)
+            # queue()'s FIRST positional is status_update_rate, not max_size --
+            # so the inherited `queue(64)` silently set live_updates=False and
+            # broadcast queue estimations only every 64s, while leaving max_size
+            # unlimited. Spell the intent out.
+            shared.demo.queue(
+                status_update_rate="auto",   # 1s estimations, as intended
+                max_size=64,                 # what queue(64) was meant to do
+                default_concurrency_limit=1,
+            )
+            # Any value other than gradio's sentinel 40 makes it allocate a
+            # DEDICATED CapacityLimiter for UI events; at 40 they share the
+            # process-wide anyio pool with every sync FastAPI route (progress
+            # polling, the API, our own /internal endpoints), so a burst of UI
+            # events could starve them. 8 is ample for a single-user app.
+            shared.demo.max_threads = 8
 
         gradio_auth_creds = list(initialize_util.get_gradio_auth_creds()) or None
 

@@ -61,9 +61,16 @@
             var gallery = app.querySelector('#' + tab + '_gallery');
             var hadImg = !!(gallery && gallery.querySelector('img'));
             btn.click();
-            // one shot: recorded results die with the server anyway, and a
-            // lingering id would re-trigger on every later page load
-            try { localStorage.removeItem(tab + '_task_id'); } catch (e2) { }
+            // One shot -- but the removal MUST lag the click. The button's
+            // handler is a gradio `js=` function (restoreProgressTxt2img) that
+            // reads this very key, and gradio 6 evaluates it asynchronously,
+            // AFTER this synchronous click handler returns. Removing it inline
+            // won the race and handed restore_progress a null id, so recovery
+            // silently no-op'd and then blamed the server for evicting it.
+            // attemptedRestores[] already prevents a retry loop.
+            setTimeout(function () {
+                try { localStorage.removeItem(tab + '_task_id'); } catch (e2) { }
+            }, 3000);
             // confirm it actually delivered -- restore_progress returns a
             // "results discarded" message (no image) when the server has
             // already evicted this task's result. Tell the user plainly instead

@@ -109,7 +109,10 @@ onAfterUiUpdate(function() {
         btn.addEventListener('click', (function(tab, container) {
             return function() {
                 showSubmitButtons(tab, false);
-                showQueuedPlaceholder(container.parentNode, container);
+                // pass `tab`: the 12s self-recovery inside only restores the
+                // Generate button `if (tab)`, so omitting it left the button
+                // hidden forever when a submit never reached the backend
+                showQueuedPlaceholder(container.parentNode, container, tab);
             };
         })(tab, container), true);
     }

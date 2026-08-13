@@ -1286,10 +1286,7 @@ def setup_ui_api(app):
     # diagnosed server-side without asking the user for their browser console.
     from fastapi import Body
 
-    def _client_log(payload: dict = Body(...)):
-        lines = payload.get("lines") or []
-        if not isinstance(lines, list):
-            return {"ok": False}
+    def _write_client_log(lines):
         path = os.path.join(script_path, "client-debug.log")
         try:
             if os.path.exists(path) and os.path.getsize(path) > 2_000_000:
@@ -1300,6 +1297,17 @@ def setup_ui_api(app):
                     f.write(f"[{stamp} recv] {str(ln)[:2000]}\n")
         except OSError:
             pass
+
+    async def _client_log(payload: dict = Body(...)):
+        # async + executor: as a sync def this ran on the shared anyio
+        # threadpool and did os.path.getsize + append (+ a periodic 2MB
+        # os.replace) INSIDE the request, competing with progress polling and
+        # the API for the same worker pool. Forensics must never cost latency.
+        lines = payload.get("lines") or []
+        if not isinstance(lines, list):
+            return {"ok": False}
+        import asyncio
+        asyncio.get_running_loop().run_in_executor(None, _write_client_log, lines)
         return {"ok": True}
 
     app.add_api_route("/internal/client-log", _client_log, methods=["POST"])

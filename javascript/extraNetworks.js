@@ -31,6 +31,12 @@ function setupExtraNetworksForTab(tabname) {
         // so the old `> label > textarea` selector no longer matches
         var textarea = gradioApp().querySelector("#" + id + " textarea");
         if (!textarea) return;   // prompt not mounted yet (lazy tab)
+        // onAfterUiUpdate calls this after every DOM settle -- hundreds of times
+        // a session -- and each call added ANOTHER focus listener with a fresh
+        // closure. Same un-guarded-remount pattern that made the lora chips
+        // multi-fire; here it leaks listeners and burns CPU per focus.
+        if (textarea.dataset.enPromptWired) return;
+        textarea.dataset.enPromptWired = '1';
 
         if (!activePromptTextarea[tabname]) {
             activePromptTextarea[tabname] = textarea;

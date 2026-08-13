@@ -163,8 +163,14 @@ def progressapi(req: ProgressRequest):
 
 
 def restore_progress(id_task):
-    while id_task == current_task or id_task in pending_tasks:
-        time.sleep(0.1)
+    # Bounded: this runs as a QUEUED gradio event, so every call parks a
+    # threadpool worker for as long as it spins -- and the connection watchdog
+    # auto-clicks restore after a lost completion, so a stale pending entry
+    # could park workers for the full 10-minute reap window. Wait for a real
+    # in-flight job, but give up rather than hold a worker indefinitely.
+    deadline = time.time() + 300
+    while (id_task == current_task or id_task in pending_tasks) and time.time() < deadline:
+        time.sleep(0.25)
 
     res = next(iter([x[1] for x in recorded_results if id_task == x[0]]), None)
     if res is not None:
