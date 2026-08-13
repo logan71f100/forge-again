@@ -8,6 +8,7 @@
     let messages = [];        // OpenAI-format chat history (system prompt is rebuilt every call)
     let pendingImages = [];   // dataURLs attached to the next user message
     let busy = false;
+    let panelEverOpened = false;   // watchdog cadence gate
     let statusTimer = null;
     let autoSee = true;   // auto-attach source/result images
     let lastSeen = {};    // hashes of images already in the chat, keyed per tab
@@ -2910,6 +2911,7 @@
             const show = panel.style.display === 'none';
             panel.style.display = show ? 'flex' : 'none';
             if (show) {
+                panelEverOpened = true;   // watchdog switches to its 3s cadence
                 refreshStatus();
                 if (!statusTimer) statusTimer = setInterval(refreshStatus, 5000);
             } else if (statusTimer) {
@@ -3055,10 +3057,17 @@
             }
         }).catch(() => { });
 
-        // worker-paced so it keeps running when the tab is unfocused
+        // Worker-paced so it keeps running when the tab is unfocused. The
+        // cadence adapts: a 3s beat is only worth its cost while the assistant
+        // is actually in use. Idle -- panel never opened, nothing generating --
+        // it ran ~1 request/second FOREVER (status + progress + guidance), and
+        // with llama-server down each /forge-ai/status could block a server
+        // thread for seconds while its probes timed out. Back off to 20s when
+        // there is nothing to watch.
         (async () => {
             for (;;) {
-                await sleep(3000);
+                var active = panelEverOpened || busy || (typeof uiRestoring !== 'undefined' && uiRestoring);
+                await sleep(active ? 3000 : 20000);
                 try { await watchdog(); } catch (e) { /* keep ticking */ }
             }
         })();

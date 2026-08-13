@@ -373,13 +373,27 @@ def _api_port():
         return 5000
 
 
-def _api_ready():
-    # /health responds even while the server is hibernated
+_api_ready_cache = {"t": 0.0, "v": False}
+
+
+def _api_ready(max_age=5.0):
+    # /health responds even while the server is hibernated.
+    # CACHED + short-circuited: the UI watchdog polls status on a timer, and
+    # with no llama-server running every probe used to burn a full 2s timeout
+    # on a threadpool worker. If we never launched a process and nothing is
+    # listening, the answer is no -- cheaply.
+    now = time.time()
+    if now - _api_ready_cache["t"] < max_age:
+        return _api_ready_cache["v"]
+    ok = False
     try:
-        r = requests.get(_api_base() + "/health", timeout=2)
-        return r.status_code == 200
+        if _proc_alive() or _pid_on_port(_api_port()):
+            r = requests.get(_api_base() + "/health", timeout=1)
+            ok = r.status_code == 200
     except Exception:
-        return False
+        ok = False
+    _api_ready_cache.update(t=now, v=ok)
+    return ok
 
 
 def _proc_alive():
