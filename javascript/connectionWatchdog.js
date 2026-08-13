@@ -35,6 +35,35 @@
         } catch (e) { /* UI not ready */ }
     }
 
+    // ---- missed-result recovery ---------------------------------------------
+    // submit() stores the task id in localStorage and only a DELIVERED
+    // completion removes it. If the completion was lost (throttled background
+    // tab, dead stream), the id lingers and the server still holds the result
+    // in progress.recorded_results -- the hidden {tab}_restore_progress button
+    // fetches it back through a FRESH connection. Fire it on reconnect, on
+    // orphan recovery, and on tab-refocus with an idle server; one attempt per
+    // task id so a truly unknown id can't loop.
+    var attemptedRestores = {};
+
+    function recoverMissedResult(reason) {
+        ['txt2img', 'img2img'].forEach(function (tab) {
+            var id = null;
+            try { id = localStorage.getItem(tab + '_task_id'); } catch (e) { return; }
+            if (!id || attemptedRestores[id]) return;
+            var btn = (typeof gradioApp === 'function' ? gradioApp() : document).getElementById(tab + '_restore_progress');
+            if (!btn) return;
+            attemptedRestores[id] = true;
+            slog('recovering missed result for ' + tab + ' (task ' + id + ', trigger: ' + reason + ')');
+            if (typeof forgeNotify !== 'undefined') {
+                forgeNotify.info('↺ Recovering the finished image…', { id: 'fa-recover', timeout: 5000 });
+            }
+            btn.click();
+            // one shot: recorded results die with the server anyway, and a
+            // lingering id would re-trigger on every later page load
+            try { localStorage.removeItem(tab + '_task_id'); } catch (e2) { }
+        });
+    }
+
     // ---- orphaned-generation detection --------------------------------------
     // gradio 6 delivers completion over an SSE event stream. If that stream
     // dies mid-job (network blip, sleep/wake, proxy timeout) the server keeps
@@ -63,7 +92,8 @@
         if (idleStrikes < 4) return;                             // ~16s of disagreement
         idleStrikes = 0;
         recoverStuckUI(true);
-        forgeNotify.warn('⚠ Lost the generation connection — controls reset. If the run finished, the image is in your output folder.', { id: 'fa-orphan', timeout: 8000 });
+        recoverMissedResult('orphan');
+        forgeNotify.warn('⚠ Lost the generation connection — recovering the finished image…', { id: 'fa-orphan', timeout: 8000 });
     }
 
     function setOnline(nowOnline) {
@@ -75,6 +105,7 @@
         } else if (everConnected) {
             forgeNotify.success('✓ Reconnected', { id: 'fa-conn', timeout: 2500 });
             recoverStuckUI();
+            recoverMissedResult('reconnect');
         }
     }
 
@@ -342,6 +373,9 @@
                 shipLog();   // piggyback: flush any new forensic lines to the server
                 if (!data) return;
                 checkOrphanedGeneration(data.busy);
+                // idle server + lingering task id = a completion this page never
+                // received (classic throttled-background-tab loss)
+                if (data.busy === false && !uiLooksGenerating()) recoverMissedResult('idle-check');
                 var id = data.boot_id;
                 if (!id) return;                       // older server: no boot_id, keep blip-only behavior
                 if (bootId === null) { bootId = id; return; }

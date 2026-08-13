@@ -125,7 +125,11 @@ class Toprow:
                 self.button_interrogate = ToolButton('📎', tooltip='Interrogate CLIP - use CLIP neural network to create a text describing the image, and put it into the prompt field', elem_id="interrogate")
                 self.button_deepbooru = ToolButton('📦', tooltip='Interrogate DeepBooru - use DeepBooru neural network to create a text describing the image, and put it into the prompt field', elem_id="deepbooru")
 
-            self.restore_progress_button = ToolButton(value=restore_progress_symbol, elem_id=f"{self.id_part}_restore_progress", visible=False, tooltip="Restore progress")
+            # visible=False would be UNMOUNTED under gradio 6 -- the restore
+            # feature (and the watchdog's missed-result recovery, which clicks
+            # this button) needs it in the DOM. Mounted CSS-hidden instead;
+            # showRestoreProgressButton() overrides with inline !important.
+            self.restore_progress_button = ToolButton(value=restore_progress_symbol, elem_id=f"{self.id_part}_restore_progress", visible=True, elem_classes=["webui-hidden-mounted"], tooltip="Restore progress")
 
             # token-counters.js relocates the counters onto the prompt boxes and clicks the
             # buttons to refresh them. gradio 6 does not mount visible=False components, so
