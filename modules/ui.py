@@ -215,6 +215,27 @@ def update_negative_prompt_token_counter(*args):
     return update_token_counter(*args, is_positive=False)
 
 
+def token_counter_call(func):
+    """Run a token counter without ever waiting on the GPU.
+
+    Token counting reads the loaded model's tokenizer, so it has to run under
+    the same queue_lock a generation holds (wrap_queued_call). That made every
+    keystroke-driven or style-change count during a generation park a
+    threadpool worker for the ENTIRE run -- several edits parked several
+    workers, squeezing the pool that progress polling and the API share.
+
+    The count is cosmetic, so skip it while a job is running; the next edit
+    (or the style change after the run) refreshes it."""
+    queued = wrap_queued_call(func)
+
+    def f(*args, **kwargs):
+        if progress.current_task is not None:
+            return gr.update()
+        return queued(*args, **kwargs)
+
+    return f
+
+
 def setup_progressbar(*args, **kwargs):
     pass
 
@@ -542,10 +563,10 @@ def create_ui():
 
             steps = scripts.scripts_txt2img.script('Sampler').steps
 
-            toprow.ui_styles.dropdown.change(fn=wrap_queued_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
-            toprow.ui_styles.dropdown.change(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
-            toprow.token_button.click(fn=wrap_queued_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
-            toprow.negative_token_button.click(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
+            toprow.ui_styles.dropdown.change(fn=token_counter_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
+            toprow.ui_styles.dropdown.change(fn=token_counter_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
+            toprow.token_button.click(fn=token_counter_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
+            toprow.negative_token_button.click(fn=token_counter_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
 
         extra_networks_ui = ui_extra_networks.create_ui(txt2img_interface, [txt2img_generation_tab], 'txt2img')
         ui_extra_networks.setup_ui(extra_networks_ui, output_panel.gallery)
@@ -900,10 +921,10 @@ def create_ui():
 
             steps = scripts.scripts_img2img.script('Sampler').steps
 
-            toprow.ui_styles.dropdown.change(fn=wrap_queued_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
-            toprow.ui_styles.dropdown.change(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
+            toprow.ui_styles.dropdown.change(fn=token_counter_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
+            toprow.ui_styles.dropdown.change(fn=token_counter_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
             toprow.token_button.click(fn=update_token_counter, inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
-            toprow.negative_token_button.click(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
+            toprow.negative_token_button.click(fn=token_counter_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
 
             img2img_paste_fields = [
                 (toprow.prompt, "Prompt"),

@@ -228,6 +228,14 @@ def create_output_panel(tabname, outdir, toprow=None):
                             inputs=[res.generation_info, res.infotext, res.infotext],
                             outputs=[res.infotext, res.infotext],
                             show_progress=False,
+                            # queue=False: this only reformats already-returned
+                            # infotext for the selected gallery index -- it reads
+                            # no shared state, so it cannot race a generation.
+                            # It fires on EVERY gallery click, including the
+                            # automatic select-first click 250ms after each
+                            # result lands, and queued it opened a full SSE
+                            # stream (and rode the generation's stream) each time.
+                            queue=False,
                         )
 
                     save.click(
