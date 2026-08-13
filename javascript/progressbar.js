@@ -165,9 +165,21 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
     parentProgressbar.insertBefore(divProgress, progressbarContainer);
 
     var livePreview = null;
+    // Poll-failure tolerance. request()'s error path fires on ANY non-200 or
+    // parse error -- a single transient blip (server briefly busy, a dropped
+    // request while the GPU is saturated) used to tear the whole progress UI
+    // down mid-run. That also calls atEnd(), which clears the stored task id,
+    // which in turn destroys the watchdog's ability to recover the result: one
+    // hiccup and a still-running generation looked finished and became
+    // unrecoverable. Tolerate a few consecutive failures instead.
+    var progressFailures = 0;
+    var previewFailures = 0;
+    var MAX_POLL_FAILURES = 5;
+    var stopped = false;
 
     var removeProgressBar = function() {
         releaseWakeLock();
+        stopped = true;
         if (!divProgress) return;
 
         setTitle("");
@@ -228,10 +240,20 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 onProgress(res);
             }
 
-            setTimeout(() => {
-                funProgress(id_task, res.id_live_preview);
+            progressFailures = 0;
+
+            // Worker-paced: a hidden tab throttles main-thread timers to ~1/min,
+            // which stalls progress AND the completion detection below.
+            forgeTimer.setTimeout(() => {
+                if (!stopped) funProgress(id_task, res.id_live_preview);
             }, opts.live_preview_refresh_period || 500);
         }, function() {
+            if (!stopped && ++progressFailures < MAX_POLL_FAILURES) {
+                forgeTimer.setTimeout(() => {
+                    if (!stopped) funProgress(id_task);
+                }, 1000);
+                return;
+            }
             removeProgressBar();
         });
     };
@@ -259,11 +281,20 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 img.src = res.live_preview;
             }
 
-            setTimeout(() => {
-                funLivePreview(id_task, res.id_live_preview);
+            previewFailures = 0;
+
+            forgeTimer.setTimeout(() => {
+                if (!stopped) funLivePreview(id_task, res.id_live_preview);
             }, opts.live_preview_refresh_period || 500);
         }, function() {
-            removeProgressBar();
+            // A failed PREVIEW poll is cosmetic -- it must never tear down the
+            // run's progress tracking. Retry a few times, then just stop
+            // previewing; funProgress still owns completion detection.
+            if (!stopped && ++previewFailures < MAX_POLL_FAILURES) {
+                forgeTimer.setTimeout(() => {
+                    if (!stopped) funLivePreview(id_task, id_live_preview);
+                }, 1000);
+            }
         });
     };
 
