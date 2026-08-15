@@ -81,8 +81,25 @@ window.forgeTimer = (function () {
         var nativeCAF = window.cancelAnimationFrame.bind(window);
         var shimmed = Object.create(null);
 
+        // Callbacks scheduled while VISIBLE that have not fired yet. Checking
+        // document.hidden only at scheduling time is not enough: the common
+        // sequence is click Generate (tab visible, so the native rAF is used)
+        // and THEN switch away -- at which point that frame never arrives and
+        // the callback is parked until the user comes back. Reported as "hit
+        // generate, came back 30 seconds later and it still hadn't started".
+        var pendingNative = new Map();
+
         window.requestAnimationFrame = function (cb) {
-            if (!document.hidden) return nativeRAF(cb);
+            if (document.hidden) return scheduleOnWorker(cb);
+            var id = nativeRAF(function (ts) {
+                pendingNative.delete(id);
+                cb(ts);
+            });
+            pendingNative.set(id, cb);
+            return id;
+        };
+
+        function scheduleOnWorker(cb) {
             var id = api.setTimeout(function () {
                 delete shimmed[id];
                 try {
@@ -93,15 +110,31 @@ window.forgeTimer = (function () {
             }, 16);
             shimmed[id] = true;
             return id;
-        };
+        }
 
         window.cancelAnimationFrame = function (id) {
             if (id !== undefined && shimmed[id]) {
                 delete shimmed[id];
                 return api.clearTimeout(id);
             }
+            pendingNative.delete(id);
             return nativeCAF(id);
         };
+
+        // The moment the tab goes away, adopt every frame callback that was
+        // scheduled while it was visible -- otherwise they sit parked until the
+        // user returns, stalling whatever awaited them (gradio's submit path
+        // awaits Svelte's tick(), which races rAF against a throttled timer).
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden || pendingNative.size === 0) return;
+            var parked = Array.from(pendingNative.entries());
+            pendingNative.clear();
+            parked.forEach(function (entry) {
+                try { nativeCAF(entry[0]); } catch (e) { /* already fired */ }
+                scheduleOnWorker(entry[1]);
+            });
+            console.log('[forgeTimer] tab hidden: adopted ' + parked.length + ' parked frame callback(s)');
+        });
     } catch (e) {
         console.warn('[forgeTimer] could not shim requestAnimationFrame:', e);
     }
