@@ -861,7 +861,45 @@ def estimate_run_inference_memory(p: StableDiffusionProcessing) -> int:
     }.get(getattr(shared.opts, 'forge_preset', 'xl'), (512, 1536))
 
     estimate = base_mb + per_mpx_mb * mpx
-    return int(min(estimate, memory_management.total_vram * 0.6))
+
+    # HARD RULE: never reserve so much that the diffusion weights get pushed
+    # into CPU swap. The reserve exists to stop activation allocations from
+    # evicting weights mid-run -- but past a point it causes exactly the
+    # disaster it prevents. Observed on an 11GB card: a large chroma run
+    # reserved the 60% cap (6758 MB), leaving 4.5 GB for a 7.3 GB model, so
+    # 3.3 GB paged over PCIe every step -- 44 s/it and a ~2 hour ETA, plus a
+    # CUDA allocator assert during VAE decode. A tighter activation budget is
+    # strictly better: at worst it OOMs into the existing tiled-VAE fallback,
+    # which is seconds, not hours.
+    cap = memory_management.total_vram * 0.6
+    model_mb = _resident_weights_mb()
+    if model_mb > 0:
+        keep_resident = memory_management.total_vram - model_mb - 384   # 384MB slack
+        cap = min(cap, max(1024, keep_resident))
+
+    reserve = int(min(estimate, cap))
+    if estimate > cap * 1.05:
+        # the run wants more working memory than can coexist with the weights
+        p._reserve_clipped = (int(estimate), reserve, int(model_mb))
+    return reserve
+
+
+def _resident_weights_mb():
+    """Approximate MB of diffusion weights that should stay resident on the GPU.
+
+    Uses the checkpoint file on disk: for safetensors/GGUF that is very close to
+    the weight bytes, and unlike the loaded-model bookkeeping it is available
+    BEFORE the load we are budgeting for. Returns 0 when unknown (caller then
+    keeps the plain percentage cap)."""
+    try:
+        from modules import sd_models
+        info = sd_models.select_checkpoint()
+        filename = getattr(info, 'filename', None)
+        if filename and os.path.isfile(filename):
+            return os.path.getsize(filename) / (1024 * 1024)
+    except Exception:
+        pass
+    return 0
 
 
 def manage_model_and_prompt_cache(p: StableDiffusionProcessing):
@@ -914,6 +952,19 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
             from modules import generation_hints
             generation_hints.add(p, f'Hint: the inference reserve was raised to {est_mb} MB for this run '
                                     f'(large resolution/batch); fewer model weights stay on the GPU, so it may run slower than usual.')
+
+        clipped = getattr(p, '_reserve_clipped', None)
+        if clipped:
+            wanted, given, model_mb = clipped
+            print(f'[Memory] This run wants ~{wanted} MB of working memory but only {given} MB can be '
+                  f'reserved without pushing the ~{model_mb} MB model into CPU swap -- capping. '
+                  f'If it errors or crawls, lower the resolution/batch or use a smaller checkpoint.')
+            from modules import generation_hints
+            generation_hints.add(p, f'Hint: {p.width}x{p.height} needs about {wanted} MB of working memory, but only '
+                                    f'{given} MB is free alongside the {model_mb} MB model on this GPU. Reserving more '
+                                    f'would page the weights to system RAM and make the run many times slower, so the '
+                                    f'reserve was capped. If this run fails or is very slow, reduce the resolution or '
+                                    f'batch size, or use a smaller/more quantized checkpoint.')
 
         # load/reload model and manage prompt cache as needed
         if getattr(p, 'txt2img_upscale', False):
