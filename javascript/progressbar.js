@@ -132,6 +132,17 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
         parentProgressbar.removeChild(stale);
     }
 
+    // Clear any live-preview left behind by an earlier run (see
+    // clearLivePreviews) so a new generation never starts with a stale preview
+    // pinned in front of the gallery.
+    if (gallery) {
+        try {
+            gallery.querySelectorAll(':scope > .livePreview').forEach(function(el) {
+                if (el.parentNode) el.parentNode.removeChild(el);
+            });
+        } catch (e) { /* gallery mid-rebuild */ }
+    }
+
     var requestWakeLock = async function() {
         if (!opts.prevent_screen_sleep_during_generation || wakeLock) return;
         try {
@@ -187,11 +198,27 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
 
         setTitle("");
         parentProgressbar.removeChild(divProgress);
-        if (gallery && livePreview) gallery.removeChild(livePreview);
+        divProgress = null;          // set BEFORE the sweep: any late img.onload
+                                     // must see the run as over (see funLivePreview)
+        clearLivePreviews();
         atEnd();
-
-        divProgress = null;
     };
+
+    // Remove every live-preview node from this gallery, not just the one this
+    // closure happens to hold. A preview whose <img> decoded after the run
+    // finished used to insert a FRESH .livePreview in front of the results,
+    // which nothing ever cleaned up -- the gallery then showed a stale preview
+    // instead of the new image, and the next run's selection logic tripped over
+    // the orphan ("gallery stuck").
+    function clearLivePreviews() {
+        livePreview = null;
+        if (!gallery) return;
+        try {
+            gallery.querySelectorAll(':scope > .livePreview').forEach(function(el) {
+                if (el.parentNode) el.parentNode.removeChild(el);
+            });
+        } catch (e) { /* gallery mid-rebuild */ }
+    }
 
     var funProgress = function(id_task) {
         requestWakeLock();
@@ -270,6 +297,11 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
             if (res.live_preview && gallery) {
                 var img = new Image();
                 img.onload = function() {
+                    // Decode is ASYNC: the run can finish between the response
+                    // above and this callback. Without re-checking, a late
+                    // preview re-inserts itself into a gallery that is already
+                    // showing the final result.
+                    if (stopped || !divProgress) return;
                     if (!livePreview) {
                         livePreview = document.createElement('div');
                         livePreview.className = 'livePreview';
