@@ -143,6 +143,47 @@
         });
     }
 
+    // ---- re-attach to a job the page stopped tracking -------------------------
+    // The mirror image of orphan detection below: there, the UI thinks it is
+    // generating while the server is idle. Here the SERVER is running a job the
+    // page has lost -- classically after an interrupt, which tears the progress
+    // UI down immediately while the generation keeps going to the next step
+    // boundary. Symptom: no progress bar, but the terminal is clearly still
+    // working, and the finished image has nothing to arrive into.
+    var reattached = {};
+
+    function reattachRunningJob(task) {
+        if (!task || reattached[task]) return;
+        if (typeof requestProgress !== 'function' || typeof showSubmitButtons !== 'function') return;
+        var app = (typeof gradioApp === 'function') ? gradioApp() : document;
+
+        // Which tab? Use the one the user is actually looking at; a task id
+        // carries no tab of its own.
+        var tab = null;
+        try {
+            var pane = (typeof get_uiCurrentTabContent === 'function') ? get_uiCurrentTabContent() : null;
+            if (pane && pane.id) tab = pane.id.replace(/^tab_/, '');
+        } catch (e) { /* no active pane */ }
+        if (tab !== 'txt2img' && tab !== 'img2img') return;
+
+        var container = app.getElementById(tab + '_gallery_container');
+        if (!container || !container.parentNode) return;
+        if (container.parentNode.querySelector(':scope > .progressDiv')) return;   // already tracking
+
+        reattached[task] = true;
+        slog('re-attaching to running job ' + task + ' on ' + tab + ' (page had no progress bar)');
+        shipLog();
+        try { localStorage.setItem(tab + '_task_id', task); } catch (e) { }
+        showSubmitButtons(tab, false);
+        forgeNotify.info('\u21ba Reconnected to the running generation\u2026', { id: 'fa-reattach', timeout: 4000 });
+        requestProgress(task, container, app.getElementById(tab + '_gallery'), function () {
+            showSubmitButtons(tab, true);
+            // the image itself rides the gradio event stream this page is no
+            // longer on, so pull it from the server's recorded results
+            recoverMissedResult('reattach-finished');
+        });
+    }
+
     // ---- orphaned-generation detection --------------------------------------
     // gradio 6 delivers completion over an SSE event stream. If that stream
     // dies mid-job (network blip, sleep/wake, proxy timeout) the server keeps
@@ -472,6 +513,8 @@
                 // idle server + lingering task id = a completion this page never
                 // received (classic throttled-background-tab loss)
                 if (data.busy === false && !uiLooksGenerating()) recoverMissedResult('idle-check');
+                // server working, page not showing it -> adopt the job
+                if (data.busy === true && data.task && !uiLooksGenerating()) reattachRunningJob(data.task);
                 var id = data.boot_id;
                 if (!id) return;                       // older server: no boot_id, keep blip-only behavior
                 if (bootId === null) { bootId = id; return; }

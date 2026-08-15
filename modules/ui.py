@@ -1296,7 +1296,14 @@ def setup_ui_api(app):
         # detect that orphaned state and reset the controls.
         from modules import progress
         progress.reap_stale_pending_tasks()
-        return {"boot_id": boot_id, "busy": progress.current_task is not None or bool(progress.pending_tasks)}
+        # `task` lets a page that lost track of a running job (e.g. an interrupt
+        # that cleared the UI while the generation kept going) re-attach to it
+        # instead of sitting there with no progress bar.
+        return {
+            "boot_id": boot_id,
+            "busy": progress.current_task is not None or bool(progress.pending_tasks),
+            "task": progress.current_task,
+        }
 
     app.add_api_route("/internal/ping", _ping, methods=["GET"])
 
