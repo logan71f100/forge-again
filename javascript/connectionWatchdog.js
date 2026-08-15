@@ -35,6 +35,61 @@
         } catch (e) { /* UI not ready */ }
     }
 
+    // ---- submit watchdog -----------------------------------------------------
+    // Reported: hit Generate, switch tabs, and the run sometimes never starts.
+    // A backgrounded tab throttles timers and pauses rAF entirely, and the
+    // submit can stall before the queue join is even issued -- leaving a dead
+    // "Queued..." bar and no job. We cannot un-throttle the browser, but we can
+    // notice and offer a one-click retry instead of leaving the user stranded,
+    // and record exactly which stage stalled for diagnosis.
+    var pendingSubmits = {};
+
+    function markSubmitJoined() {
+        Object.keys(pendingSubmits).forEach(function (t) { pendingSubmits[t].joined = true; });
+    }
+    function markSubmitStarted() {
+        Object.keys(pendingSubmits).forEach(function (t) { pendingSubmits[t].started = true; });
+        // A job is running again, so any earlier "never started" warning is
+        // stale -- it is sticky by design, and leaving it up next to a working
+        // generation is worse than not warning at all.
+        if (typeof forgeNotify !== 'undefined') {
+            forgeNotify.dismiss('fa-submit-txt2img');
+            forgeNotify.dismiss('fa-submit-img2img');
+        }
+    }
+
+    function checkSubmitLanded(tab) {
+        var s = pendingSubmits[tab];
+        if (!s || s.started) { delete pendingSubmits[tab]; return; }
+        var stage = s.joined ? 'joined the queue but never started' : 'never reached the server (no queue join)';
+        slog('SUBMIT STALLED on ' + tab + ': ' + stage +
+             ' (tab hidden at click: ' + s.hidden + ', still hidden: ' + document.hidden + ')');
+        shipLog();
+        delete pendingSubmits[tab];
+        if (typeof forgeNotify === 'undefined') return;
+        forgeNotify.warn('\u26a0 That generation never started' +
+            (s.hidden ? ' \u2014 the tab was in the background.' : '.'), {
+            id: 'fa-submit-' + tab,
+            timeout: 0,
+            buttons: [
+                { label: '\u21bb Retry', primary: true, onClick: function () { try { s.btn.click(); } catch (e) { } } },
+                { label: 'Dismiss', onClick: function () { } },
+            ],
+        });
+    }
+
+    document.addEventListener('click', function (ev) {
+        if (!ev.isTrusted) return;
+        var btn = ev.target && ev.target.closest ? ev.target.closest('button[id$="_generate"]') : null;
+        if (!btn) return;
+        var tab = btn.id.slice(0, -'_generate'.length);
+        pendingSubmits[tab] = { t: Date.now(), hidden: document.hidden, joined: false, started: false, btn: btn };
+        slog('generate clicked on ' + tab + ' (tab hidden: ' + document.hidden + ')');
+        // forgeTimer: a plain setTimeout here would itself be throttled in the
+        // very background tab whose failure we are trying to catch.
+        forgeTimer.setTimeout(function () { checkSubmitLanded(tab); }, 15000);
+    }, true);
+
     // ---- missed-result recovery ---------------------------------------------
     // submit() stores the task id in localStorage and only a DELIVERED
     // completion removes it. If the completion was lost (throttled background
@@ -195,6 +250,7 @@
                             slog('event process_completed ' + summary);
                         } else if (msg !== 'progress' && msg !== 'estimation') {
                             if (msg === 'close_stream') state.sawClose = true;
+                            if (msg === 'process_starts') markSubmitStarted();
                             slog('event ' + msg);
                         }
                     } catch (e3) { /* non-JSON data line */ }
@@ -230,6 +286,22 @@
     var origFetch = window.fetch;
     window.fetch = function (input) {
         var url = (typeof input === 'string') ? input : ((input && input.url) || '');
+        // The JOIN is the request that actually enqueues the job. Logging it
+        // separates "the browser never sent the submit" (background-tab stall)
+        // from "the server refused/lost it" -- previously indistinguishable.
+        if (url.indexOf('queue/join') !== -1) {
+            var jt = Date.now();
+            return origFetch.apply(this, arguments).then(function (r) {
+                slog('queue JOIN -> HTTP ' + r.status + ' in ' + ((Date.now() - jt) / 1000).toFixed(2) + 's');
+                markSubmitJoined();
+                shipLog();
+                return r;
+            }, function (err) {
+                slog('queue JOIN FAILED after ' + ((Date.now() - jt) / 1000).toFixed(2) + 's: ' + (err && err.name || err));
+                shipLog();
+                throw err;
+            });
+        }
         if (url.indexOf('queue/data') === -1) return origFetch.apply(this, arguments);
         var t0 = Date.now();
         var secs = function () { return ((Date.now() - t0) / 1000).toFixed(1); };
