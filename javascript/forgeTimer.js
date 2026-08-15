@@ -41,7 +41,7 @@ window.forgeTimer = (function () {
         return worker;
     }
 
-    return {
+    var api = {
         setTimeout: function (fn, ms) {
             var w = ensureWorker();
             if (!w) return window.setTimeout(fn, ms);
@@ -58,4 +58,53 @@ window.forgeTimer = (function () {
             }
         },
     };
+
+    // ---- requestAnimationFrame in hidden tabs --------------------------------
+    // Browsers PAUSE rAF completely while a tab is hidden -- it does not fire
+    // late, it does not fire at all until the tab is looked at again. That is
+    // fine for animation, and fatal for anything on a correctness path.
+    //
+    // Svelte 5's tick() -- which gradio's client awaits while submitting -- is:
+    //     new Promise(e => { requestAnimationFrame(() => e()); setTimeout(() => e()); })
+    // i.e. it resolves on whichever fires first. In a hidden tab the rAF half
+    // never fires, so every await falls back to a THROTTLED timer, and a submit
+    // that awaits several ticks stalls for seconds -- or until the tab regains
+    // focus and the queued rAF callbacks all fire at once. Reported exactly
+    // that way: "hit generate, switched tabs, it didn't start until I came
+    // back".
+    //
+    // So: while the document is hidden, service rAF callbacks from the Worker
+    // clock (which browsers do not throttle). Visible tabs keep the real rAF,
+    // untouched, so animation timing and vsync alignment are unaffected.
+    try {
+        var nativeRAF = window.requestAnimationFrame.bind(window);
+        var nativeCAF = window.cancelAnimationFrame.bind(window);
+        var shimmed = Object.create(null);
+
+        window.requestAnimationFrame = function (cb) {
+            if (!document.hidden) return nativeRAF(cb);
+            var id = api.setTimeout(function () {
+                delete shimmed[id];
+                try {
+                    cb(performance.now());              // rAF passes a timestamp
+                } catch (e) {
+                    console.error('[forgeTimer] rAF callback failed:', e);
+                }
+            }, 16);
+            shimmed[id] = true;
+            return id;
+        };
+
+        window.cancelAnimationFrame = function (id) {
+            if (id !== undefined && shimmed[id]) {
+                delete shimmed[id];
+                return api.clearTimeout(id);
+            }
+            return nativeCAF(id);
+        };
+    } catch (e) {
+        console.warn('[forgeTimer] could not shim requestAnimationFrame:', e);
+    }
+
+    return api;
 })();
