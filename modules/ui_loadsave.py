@@ -20,6 +20,9 @@ class UiLoadsave:
         self.component_mapping = {}
         self.error_loading = False
         self.finalized_ui = False
+        # set while applying saved values to a block that was built AFTER
+        # finalization (the lazy img2img tab); see apply_saved_to_components
+        self.apply_only = False
 
         self.ui_defaults_view = None
         self.ui_defaults_apply = None
@@ -36,7 +39,7 @@ class UiLoadsave:
     def add_component(self, path, x):
         """adds component to the registry of tracked components"""
 
-        assert not self.finalized_ui
+        assert not self.finalized_ui or self.apply_only
 
         def apply_field(obj, field, condition=None, init_field=None):
             key = f"{path}/{field}"
@@ -53,6 +56,8 @@ class UiLoadsave:
                 field = 'open'
 
             if saved_value is None:
+                if self.apply_only:
+                    return            # nothing saved for this control: leave its built-in default
                 value_in_gradio = getattr(obj, field)
                 if isinstance(obj, gr.Textbox) and field == 'value' and value_in_gradio is None:
                     value_in_gradio = ''  # Gradio 4 fix: https://github.com/lllyasviel/stable-diffusion-webui-forge/issues/880
@@ -72,7 +77,10 @@ class UiLoadsave:
                 if init_field is not None:
                     init_field(saved_value)
 
-            if field == 'value' and key not in self.component_mapping:
+            # Never grow the mapping in apply-only mode: the Defaults tab was
+            # already built against a FIXED component list and zip()s its values
+            # against component_mapping, so adding entries later misaligns it.
+            if field == 'value' and key not in self.component_mapping and not self.apply_only:
                 self.component_mapping[key] = obj
 
         if type(x) in [gr.Slider, gr.Radio, gr.Checkbox, gr.Textbox, gr.Number, gr.Dropdown, ToolButton, gr.Button] and x.visible:
@@ -126,6 +134,38 @@ class UiLoadsave:
 
         if type(x) == gr.Tabs:
             apply_field(x, 'selected', check_tab_id)
+
+    def apply_saved_to_components(self, components, path=""):
+        """Apply saved ui-config values to controls built AFTER finalization.
+
+        create_ui() calls add_block()/setup_ui() while building the page, but
+        the img2img tab's body is constructed lazily inside a gr.render the
+        first time the tab is opened -- long after that. Its controls therefore
+        never received their ui-config defaults at all: 'Inpaint area',
+        'Masked content', 'Mask blur', 'Only masked padding', 'Resize by' and
+        friends silently ignored whatever was in ui-config.json.
+
+        This applies the saved values to such controls without registering them
+        (see the component_mapping note in add_component).
+        """
+        prev = self.apply_only
+        self.apply_only = True
+        applied = 0
+        try:
+            for c in components:
+                label = getattr(c, 'label', None)
+                try:
+                    if label:
+                        self.add_component(f"{path}/{label}", c)
+                        applied += 1
+                    elif isinstance(c, gr.Button) and getattr(c, 'value', None):
+                        self.add_component(f"{path}/{c.value}", c)
+                        applied += 1
+                except Exception as e:
+                    print(f"[ui-config] could not apply defaults to {path}/{label}: {e}")
+        finally:
+            self.apply_only = prev
+        return applied
 
     def add_block(self, x, path=""):
         """adds all components inside a gradio block x to the registry of tracked components"""

@@ -998,7 +998,24 @@ def create_ui():
         @gr.render(triggers=[img2img_built_gate.change])
         def _render_img2img_body():
             with gradio_extensions.force_interactive_components():
+                # NB: Context.root_block is None inside a gr.render (the same
+                # trap ForgeCanvas hit); get_blocks_context() is the
+                # render-aware handle and exposes the component registry.
+                from gradio.context import get_blocks_context as _gbc
+                _cfg = _gbc()
+                _before = set(_cfg.blocks.keys()) if _cfg is not None else set()
                 _build_img2img_body()
+                # LAZY TAB DEFAULTS: this body is built long after create_ui()
+                # ran add_block()/setup_ui(), so ui-config.json defaults never
+                # reached any of these controls ("Inpaint area" etc. were
+                # silently ignored). Apply them to whatever was just created.
+                try:
+                    if _cfg is not None:
+                        _new = [c for cid, c in _cfg.blocks.items() if cid not in _before]
+                        n = loadsave.apply_saved_to_components(_new, "img2img")
+                        print(f"[ui-config] applied saved defaults to {n} lazily-built img2img control(s)")
+                except Exception as _e:
+                    print(f"[ui-config] could not apply lazy img2img defaults: {_e}")
 
     img2img_interface.img2img_built_gate = img2img_built_gate
 
