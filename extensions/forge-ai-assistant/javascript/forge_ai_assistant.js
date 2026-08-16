@@ -298,6 +298,17 @@
             else if (tabName) prefix = (accTitle ? accTitle + ' > ' : '') + tabName;
             else if (accTitle) prefix = accTitle;
             if (prefix && !c.label.startsWith(prefix)) c.label = prefix + ' > ' + c.label;
+            // A label that is nothing but a positional decoration names no
+            // control. ControlNet's timestep ranges are double-ended sliders
+            // with no <label> of their own, so they arrive as a bare
+            // "(start)"/"(end)"; an unlabelled block can arrive as "Dropdown".
+            // Snapshotting those is pointless -- ui-config has no such key, so
+            // they can never be recognised as defaults, and they are what kept
+            // an untouched img2img tab alive in the session -- and RESTORING
+            // them is actively wrong: the label matches whichever unit's slider
+            // is found first, which with three ControlNet units is a coin toss
+            // into the wrong one. A section prefix rescues the label.
+            if (!prefix && /^(\(start\)|\(end\)|Dropdown)$/.test(c.label)) return;
             const n = (seenLabels[c.label] || 0) + 1;
             seenLabels[c.label] = n;
             if (n > 1) c.label = c.label + ' #' + n;

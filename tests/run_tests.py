@@ -436,6 +436,9 @@ SESSION_SNAPSHOT = {
         "Styles": "",                                    # empty multiselect, recorded as []
         "Hires. fix": "false",                           # accordion toggle matching a same-named dropdown
         "Balanced": "Balanced",                          # unlabeled radio on its first option
+        "(start)": "4",                                  # unlabelled double-ended slider: names nothing
+        "(end) #2": "100",                               # ditto, with the dedupe suffix
+        "ControlNet Unit 1 > (start)": "7",              # SAME decoration, but the prefix names it
         "Prompt": "a cat",                               # CHANGED
         "Height": "1000",                                # no record, not a default we can name
         "fill": "original",                              # radio moved OFF its first option
@@ -447,7 +450,8 @@ SESSION_SNAPSHOT = {
     },
 }
 
-SESSION_EXPECTED = {"Txt2img": {"Prompt", "Height", "fill", "__subtab"}}
+SESSION_EXPECTED = {"Txt2img": {"Prompt", "Height", "fill", "__subtab",
+                                "ControlNet Unit 1 > (start)"}}
 
 
 def check_session_pruning() -> None:

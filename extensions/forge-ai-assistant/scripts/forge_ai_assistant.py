@@ -1099,6 +1099,27 @@ def _shapes_agree(val, known):
     return any(_shape(r) == _shape(val) for r in (known or ()))
 
 
+def _is_unidentifiable(label):
+    """A capture label that does not name any control.
+
+    A double-ended slider with no <label> of its own -- ControlNet's timestep
+    ranges -- is captured as a bare "(start)" / "(end)", and an unlabelled block
+    can arrive as "#2" or "Dropdown". Nothing can be done with these. ui-config
+    has no such key, so pruning can never judge them and always keeps them; that
+    is what kept an img2img tab in the session after everything real had been
+    removed from it. RESTORE is worse than useless: it matches the first control
+    carrying the same decoration, which in a tab holding three ControlNet units
+    is a coin toss into the wrong unit.
+
+    A section prefix rescues the label ("ControlNet Unit 1 > (start)" does name
+    something), so only bare decorations are dropped.
+    """
+    if " > " in label:
+        return False
+    base = re.sub(r"\s*#\d+$", "", label).strip()
+    return base in ("", "(start)", "(end)", "Dropdown")
+
+
 def _is_first_choice(label, val):
     """An unlabeled radio still sitting on its first option.
 
@@ -1174,6 +1195,8 @@ def _prune_default_values(snapshots):
         for label, val in snap.items():
             if label.startswith("__"):
                 kept[label] = val
+                continue
+            if _is_unidentifiable(label):
                 continue
             # a section prefix ("Replacer > ...") is often a tab of its own
             tabs = [tab_token]
