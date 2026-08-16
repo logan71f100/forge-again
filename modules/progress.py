@@ -92,10 +92,18 @@ class ProgressResponse(BaseModel):
     live_preview: str | None = Field(default=None, title="Live preview image", description="Current live preview; a data: uri")
     id_live_preview: int | None = Field(default=None, title="Live preview image ID", description="Send this together with next request to prevent receiving same image")
     textinfo: str | None = Field(default=None, title="Info text", description="Info text used by WebUI.")
+    paused: bool = Field(default=False, title="Whether the run is paused after its first preview and waiting to be resumed")
+
+
+def resumeapi():
+    """Let a run that paused after its first preview carry on."""
+    shared.state.resume()
+    return {"resumed": True}
 
 
 def setup_progress_api(app):
     app.add_api_route("/internal/pending-tasks", get_pending_tasks, methods=["GET"])
+    app.add_api_route("/internal/resume", resumeapi, methods=["POST"])
     return app.add_api_route("/internal/progress", progressapi, methods=["POST"], response_model=ProgressResponse)
 
 
@@ -159,7 +167,7 @@ def progressapi(req: ProgressRequest):
                 live_preview = f"data:image/{opts.live_previews_image_format};base64,{base64_image}"
                 id_live_preview = shared.state.id_live_preview
 
-    return ProgressResponse(active=active, queued=queued, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)
+    return ProgressResponse(active=active, queued=queued, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo, paused=shared.state.paused)
 
 
 def restore_progress(id_task):

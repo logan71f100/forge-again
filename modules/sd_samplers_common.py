@@ -127,6 +127,22 @@ def store_latent(decoded):
         if not shared.parallel_processing_allowed:
             shared.state.assign_current_image(sample_to_image(decoded))
 
+    # "Pause after the first preview". This is the sampler thread and the only
+    # safe place to block: the other route to a preview
+    # (progressapi -> set_current_image) runs on the HTTP thread, and stopping
+    # THAT would freeze the progress endpoint and take the Resume button down
+    # with it. Waiting for id_live_preview to move rather than for a step count
+    # means we pause once a preview genuinely exists, whichever thread made it.
+    if shared.state.pause_armed and not shared.state.paused:
+        if shared.state.id_live_preview <= 0:
+            if not opts.live_previews_enable:
+                # pausing is only useful if there is something to look at
+                shared.state.assign_current_image(sample_to_image(decoded))
+            else:
+                return          # a preview is coming; pause on a later step
+        shared.state.paused = True
+        shared.state.wait_while_paused()
+
 
 def is_sampler_using_eta_noise_seed_delta(p):
     """returns whether sampler from config will use eta noise seed delta for image creation"""

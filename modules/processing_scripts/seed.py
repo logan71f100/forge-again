@@ -2,7 +2,7 @@ import json
 
 import gradio as gr
 
-from modules import scripts, ui, errors
+from modules import scripts, ui, errors, shared
 from modules.infotext_utils import PasteField
 from modules.shared import cmd_opts
 from modules.ui_components import ToolButton
@@ -36,6 +36,15 @@ class ScriptSeed(scripts.ScriptBuiltinUI):
 
             seed_checkbox = gr.Checkbox(label='Extra', elem_id=self.elem_id("subseed_show"), value=False, scale=0, min_width=60)
 
+        # Catch a bad composition in the first few steps instead of after a
+        # full sampling pass. Deliberately a per-run UI value rather than a
+        # setting: it travels with the request, so arming it in one tab cannot
+        # stop a run started from another (or by someone else on the server).
+        pause_after_preview = gr.Checkbox(
+            label='Pause after first preview',
+            elem_id=self.elem_id("pause_after_preview"), value=False,
+            info="Stops as soon as there is something to look at; Generate becomes Resume.")
+
         with gr.Group(visible=False, elem_id=self.elem_id("seed_extras")) as seed_extras:
             with gr.Row(elem_id=self.elem_id("subseed_row")):
                 subseed = gr.Number(label='Variation seed', value=-1, elem_id=self.elem_id("subseed"), precision=0)
@@ -64,10 +73,14 @@ class ScriptSeed(scripts.ScriptBuiltinUI):
         self.on_after_component(lambda x: connect_reuse_seed(self.seed, reuse_seed, x.component, False), elem_id=f'generation_info_{self.tabname}')
         self.on_after_component(lambda x: connect_reuse_seed(subseed, reuse_subseed, x.component, True), elem_id=f'generation_info_{self.tabname}')
 
-        return self.seed, seed_checkbox, subseed, subseed_strength, seed_resize_from_w, seed_resize_from_h
+        return self.seed, seed_checkbox, subseed, subseed_strength, seed_resize_from_w, seed_resize_from_h, pause_after_preview
 
-    def setup(self, p, seed, seed_checkbox, subseed, subseed_strength, seed_resize_from_w, seed_resize_from_h):
+    def setup(self, p, seed, seed_checkbox, subseed, subseed_strength, seed_resize_from_w, seed_resize_from_h, pause_after_preview=False):
         p.seed = seed
+
+        # setup() runs inside the job, after state.begin() cleared the flag, so
+        # this is the request's own answer and cannot leak between runs.
+        shared.state.pause_armed = bool(pause_after_preview)
 
         if seed_checkbox and subseed_strength > 0:
             p.subseed = subseed

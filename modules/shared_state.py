@@ -29,6 +29,11 @@ class State:
     current_image_sampling_step = 0
     id_live_preview = 0
     textinfo = None
+    # "Pause after the first preview": armed per-run from the seed row, so a
+    # composition that is going wrong can be caught in the first few steps
+    # instead of after a full sampling pass.
+    pause_armed = False
+    paused = False
     time_start = None
     server_start = None
     _server_command_signal = threading.Event()
@@ -100,6 +105,33 @@ class State:
         self.stopping_generation = True
         log.info("Received stop generating request")
 
+    def resume(self):
+        self.paused = False
+        # one pause per run: resuming means "carry on", not "stop me again at
+        # the next preview"
+        self.pause_armed = False
+        log.info("Received resume request")
+
+    def wait_while_paused(self):
+        """Block the SAMPLER thread while the run is paused.
+
+        Must only ever be called from the worker thread. Live previews are
+        produced on the HTTP poll thread (progressapi -> set_current_image), so
+        pausing there would freeze the progress endpoint itself and take the
+        Resume button down with it.
+
+        Interrupt and Skip both break the wait -- a paused run has to stay
+        cancellable, or a mistaken pause would need a server restart.
+        """
+        if not self.paused:
+            return
+        self.textinfo = "Paused after the first preview"
+        log.info("Paused job %s after first preview", self.job)
+        while self.paused and not self.interrupted and not self.skipped and not self.stopping_generation:
+            time.sleep(0.1)
+        self.paused = False
+        self.textinfo = None
+
     def nextjob(self):
         if shared.opts.live_previews_enable and shared.opts.show_progress_every_n_steps == -1:
             self.do_set_current_image()
@@ -138,6 +170,11 @@ class State:
         self.interrupted = False
         self.stopping_generation = False
         self.textinfo = None
+        # pause_armed is set by the seed row's setup() a moment from now, once
+        # the request's own value is known; both start clean so an abandoned
+        # pause can never carry into the next run
+        self.pause_armed = False
+        self.paused = False
         self.job = job
         devices.torch_gc()
         log.info("Starting job %s", job)
