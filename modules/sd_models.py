@@ -480,7 +480,13 @@ def forge_model_reload():
 
     timer = Timer()
 
+    # Say what we are doing, in the progress bar. Everything between here and
+    # the first sampling step is invisible from the browser -- the progress API
+    # reports the task as active with 0 progress, which the bar had no choice
+    # but to render as "Queued...", i.e. as though nothing had started. On a
+    # large GGUF this stretch is the longest silent part of a run.
     if model_data.sd_model:
+        shared.state.textinfo = "Freeing VRAM…"
         model_data.sd_model = None
         memory_management.unload_all_models()
         memory_management.soft_empty_cache()
@@ -501,6 +507,7 @@ def forge_model_reload():
     dynamic_args['forge_unet_storage_dtype'] = model_data.forge_loading_parameters.get('unet_storage_dtype', None)
     dynamic_args['embedding_dir'] = cmd_opts.embeddings_dir
     dynamic_args['emphasis_name'] = opts.emphasis
+    shared.state.textinfo = f"Loading {os.path.basename(str(state_dict))}…"
     sd_model = forge_loader(state_dict, additional_state_dicts=additional_state_dicts)
     timer.record("forge model load")
 
@@ -508,6 +515,9 @@ def forge_model_reload():
     sd_model.comments = []
     sd_model.sd_checkpoint_info = checkpoint_info
     sd_model.filename = checkpoint_info.filename
+    # first sight of a large checkpoint hashes the whole file -- seconds of
+    # apparent nothing, right after the load bar finally moved
+    shared.state.textinfo = "Hashing checkpoint…"
     sd_model.sd_model_hash = checkpoint_info.calculate_shorthash()
     timer.record("calculate hash")
 

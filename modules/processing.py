@@ -1105,6 +1105,10 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             p.parse_extra_network_prompts()
 
             if not p.disable_extra_networks:
+                # LoRAs are read off disk and merged here; several large ones
+                # take long enough to look like a hang
+                if p.extra_network_data:
+                    shared.state.textinfo = "Applying LoRAs…"
                 extra_networks.activate(p, p.extra_network_data)
 
             p.sd_model.forge_objects = p.sd_model.forge_objects_after_applying_lora.shallow_copy()
@@ -1112,7 +1116,11 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             if p.scripts is not None:
                 p.scripts.process_batch(p, batch_number=n, prompts=p.prompts, seeds=p.seeds, subseeds=p.subseeds)
 
+            # the last silent stretch before sampling: on a T5-class text
+            # encoder this is seconds of a progress bar that cannot move yet
+            shared.state.textinfo = "Encoding prompt…"
             p.setup_conds()
+            shared.state.textinfo = None
 
             p.extra_generation_params.update(p.sd_model.extra_generation_params)
 
