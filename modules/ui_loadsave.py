@@ -56,12 +56,18 @@ class UiLoadsave:
                 field = 'open'
 
             if saved_value is None:
-                if self.apply_only:
-                    return            # nothing saved for this control: leave its built-in default
                 value_in_gradio = getattr(obj, field)
                 if isinstance(obj, gr.Textbox) and field == 'value' and value_in_gradio is None:
                     value_in_gradio = ''  # Gradio 4 fix: https://github.com/lllyasviel/stable-diffusion-webui-forge/issues/880
+                # Record the built-in default even in apply_only mode. Lazily
+                # built controls (the entire img2img body, constructed inside a
+                # gr.render) used to return here without registering anything,
+                # so ui-config.json never learned what a fresh page shows for
+                # them -- leaving anything that asks "is this value still the
+                # default?" with no answer for most of the tab.
                 self.ui_settings[key] = value_in_gradio
+                if self.apply_only:
+                    return            # recorded; there is nothing saved to apply
             elif condition and not condition(saved_value):
                 pass
             else:
@@ -165,7 +171,38 @@ class UiLoadsave:
                     print(f"[ui-config] could not apply defaults to {path}/{label}: {e}")
         finally:
             self.apply_only = prev
+        self.merge_new_defaults_to_file()
         return applied
+
+    def merge_new_defaults_to_file(self):
+        """Persist defaults recorded after startup, WITHOUT touching existing ones.
+
+        Deliberately not dump_defaults(): that rewrites the whole file from this
+        object's in-memory copy, which was loaded at boot. set_mode.py rewrites
+        ui-config.json on every sd/xl/flux switch (Width, Height, CFG, Distilled
+        CFG, Denoising, Steps, Sampler, Scheduler on both tabs, plus the inpaint
+        defaults), so a full dump from a stale in-memory copy would quietly
+        revert the mode the user just switched to. Add only keys the file does
+        not already have -- the lazily-built controls we just learned about --
+        and leave every existing value exactly as written.
+        """
+        try:
+            on_disk = {}
+            if os.path.exists(self.filename):
+                with open(self.filename, "r", encoding="utf8") as file:
+                    on_disk = json.load(file)
+            if not isinstance(on_disk, dict):
+                return 0
+            new_keys = {k: v for k, v in self.ui_settings.items() if k not in on_disk}
+            if not new_keys:
+                return 0
+            on_disk.update(new_keys)
+            self.write_to_file(on_disk)
+            print(f"[ui-config] recorded defaults for {len(new_keys)} lazily-built control(s)")
+            return len(new_keys)
+        except Exception as e:
+            print(f"[ui-config] could not record lazily-built defaults: {e}")
+            return 0
 
     def add_block(self, x, path=""):
         """adds all components inside a gradio block x to the registry of tracked components"""
