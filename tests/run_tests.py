@@ -1760,10 +1760,13 @@ def check_ui_regression() -> None:
             # tab, and require them to land in last_session.json on disk.
             try:
                 import time as _time
-                sess_file = os.path.join(ROOT, "extensions", "forge-ai-assistant",
-                                         "last_session.json")
-                # this is the user's real session file -- put it back afterwards
-                backup = open(sess_file, "rb").read() if os.path.exists(sess_file) else None
+                # The server writes wherever FORGE_AI_SESSION_FILE points, which
+                # is this run's temp dir -- watching the repo path instead meant
+                # waiting for a file the server had (correctly) stopped touching,
+                # and reporting it as "no save reached the server". Nothing to
+                # back up any more either: isolation is the point.
+                sess_file = os.path.join(s.tmp, "last_session.json")
+                backup = None
                 try:
                     page.click('button[role=tab]:text-is("Img2img")', timeout=15000)
                     page.wait_for_timeout(2500)
