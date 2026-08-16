@@ -1664,11 +1664,31 @@ def check_ui_regression() -> None:
                     # a TRUSTED edit: the capture path deliberately ignores pages
                     # nobody has touched, so that a fresh load can never overwrite
                     # a real session with ui-config defaults
-                    page.fill("#img2img_distilled_cfg_scale input[type=number]", "6.5",
-                              timeout=10000)
+                    page.locator(
+                        "#img2img_distilled_cfg_scale input[type=number] >> visible=true"
+                    ).first.fill("6.5", timeout=10000)
                     page.wait_for_timeout(300)
-                    page.click('#img2img_tabs_resize button:text-is("Resize by")', timeout=10000)
-                    page.wait_for_timeout(500)
+                    # Select the nested tab through the DOM rather than a
+                    # Playwright click: gradio renders several elements per tab
+                    # (so a bare selector trips strict mode) and headless reports
+                    # the bar's buttons as zero-box (so `visible=true` matches
+                    # nothing). Reach it the same structural way the capture code
+                    # does -- direct children of the tab bar -- and report what
+                    # was actually there if the option is missing.
+                    picked = page.evaluate("""() => {
+                        const rz = document.querySelector('#img2img_tabs_resize');
+                        const bar = rz && rz.querySelector('.tab-nav, [role=tablist]');
+                        if (!bar) return 'no resize tab bar in the DOM';
+                        const btns = [...bar.children].filter(
+                            b => b.matches('button, [role=tab]') && b.textContent.trim());
+                        const by = btns.find(b => b.textContent.trim() === 'Resize by');
+                        if (!by) return 'options were: ' + btns.map(b => b.textContent.trim()).join(' | ');
+                        by.click();
+                        return 'ok';
+                    }""")
+                    page.wait_for_timeout(700)
+                    if picked != "ok":
+                        raise RuntimeError(f"could not select 'Resize by' -- {picked}")
                     before_mtime = os.path.getmtime(sess_file) if os.path.exists(sess_file) else 0
                     # leaving the tab is the moment capture has to fire
                     page.click('button[role=tab]:text-is("Txt2img")', timeout=15000)
@@ -1724,6 +1744,24 @@ def check_ui_regression() -> None:
                     if backup is not None:
                         with open(sess_file, "wb") as f:
                             f.write(backup)
+                    # Hand the page back the way we found it. This check leaves
+                    # "Resize by" selected, which UNMOUNTS the Resize-to pane --
+                    # and the detect-size button that a later check clicks lives
+                    # in it. Restore the default so nothing downstream inherits
+                    # this one's state.
+                    try:
+                        page.click('button[role=tab]:text-is("Img2img")', timeout=15000)
+                        page.wait_for_timeout(1500)
+                        page.evaluate("""() => {
+                            const rz = document.querySelector('#img2img_tabs_resize');
+                            const bar = rz && rz.querySelector('.tab-nav, [role=tablist]');
+                            const to = bar && [...bar.children].find(
+                                b => b.textContent.trim() === 'Resize to');
+                            if (to) to.click();
+                        }""")
+                        page.wait_for_timeout(700)
+                    except Exception:
+                        pass
             except Exception as e:
                 record("ui: session capture survives a tab switch", FAIL,
                        f"{type(e).__name__}: {str(e)[:160]}")
