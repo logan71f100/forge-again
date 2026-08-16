@@ -66,6 +66,12 @@ notification.mp3
 /extensions/forge-ai-assistant/last_session.json
 /extensions/forge-ai-assistant/bot_state.json
 /extensions/forge-ai-assistant/ui_profiles.json
+# ...and everything the save path derives from them. _session_save writes
+# "<file>.tmp" for the atomic replace and rotates the previous generation to
+# "<file>.prev", so those appear on their own and are just as personal as the
+# file they came from; the .bak-<date> copies are hand-made rescue points.
+/extensions/forge-ai-assistant/last_session.json.*
+/extensions/forge-ai-assistant/ui_profiles.json.*
 /extensions/forge-ai-assistant/live_guidance.txt
 /extensions/forge-ai-assistant/takeover_active
 /extensions/forge-ai-assistant/anthropic_key.txt
@@ -102,6 +108,7 @@ coverage.xml
 /current_mode.txt
 /mode_profile.json
 /config.json.bak
+/config.json.bak-*
 
 # secrets -- never commit
 /.civitai_token
