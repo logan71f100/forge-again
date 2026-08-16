@@ -1,3 +1,13 @@
+> **This is the inherited upstream changelog** from AUTOMATIC1111's
+> stable-diffusion-webui, kept for the history of the code this fork is built on.
+> The version numbers below are *upstream's* and stop at its 1.10.1 — they are not
+> this fork's.
+>
+> **forge-again's own release notes live on the
+> [Releases page](https://github.com/logan71f100/forge-again/releases)**, one entry
+> per tag. A running build reports its version from `git describe`, shown at the
+> bottom of the UI.
+
 ## 1.10.1
 
 ### Bug Fixes:

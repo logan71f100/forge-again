@@ -12,8 +12,9 @@ in `forge-llm/`, and the vision model (Qwen3-VL-30B, ~18 GB) downloads automatic
 first launch to `models/llm/`. Nothing to configure — click 🤖 and go. Set `FORGE_NO_LLM=1`
 before launching to skip the model download if you don't want the assistant, or point it at
 a different GGUF, your own `llama-server`, or the Claude API under **Settings → AI Assistant**.
-(The bundled binary is a Windows/CUDA build; on Linux/macOS build your own `llama-server` and
-set its path, or skip the assistant.)
+(The bundled binary is a Windows/CUDA build. On Linux/macOS the launcher **builds the patched
+server for you on first run** — CUDA on NVIDIA, Vulkan on AMD, Metal on macOS — needing `git`,
+`cmake` and a C compiler, and skipping the build gracefully if they're absent.)
 
 ## How it works
 
@@ -42,6 +43,31 @@ Settings live under **Settings → AI Assistant**: provider (local `llama-server
 API), model, task guidance, your own per-checkpoint notes, binary/model paths, launch args,
 max tokens, and temperature.
 
+## Settings memory: Restore session, and profiles
+
+This extension also adds two controls that have nothing to do with the chat. They sit in
+the **quicksettings row at the top of the page** (next to the mode switch), not in the chat
+panel:
+
+- **↺ Restore session** puts back the settings and prompts from your last session —
+  every tab you used, plus the quicksettings (checkpoint, VAE/text encoders, clip skip)
+  that live outside the tabs. Saving happens by itself as you work: whenever you change
+  something, leave a tab, hit Generate, or close the page. A page nobody has typed into
+  never saves, so a fresh load can't overwrite a real session with defaults, and saves are
+  cumulative — a tab you didn't open this time keeps whatever was stored for it.
+- **Profiles** name a snapshot so you can apply it later. Save the current state under a
+  name, then pick it from the dropdown to apply it across every tab.
+
+Both restore Forge UI state only. The chat, run log and reference images deliberately start
+fresh each session — restore never brings the old conversation back.
+
+Two things worth knowing about what gets captured. gradio 6 keeps a tab in the DOM once
+you've opened it, so capture reads every tab you have visited, not just the one you're
+looking at — but a tab you never opened in this session has nothing to read, and keeps its
+previously stored values. And a nested tab selection is itself a setting: "Resize to" vs
+"Resize by" decides whether the backend uses Width/Height or Scale, and the img2img mode
+strip decides whether you're in Inpaint at all, so both are saved and replayed.
+
 ## Vision
 
 Image feedback ("does this look right?") needs a **multimodal** model — one with a
@@ -62,5 +88,5 @@ images rather than hallucinate.
 - Gradio 6 dropdowns are custom widgets; the assistant sets them by clicking the matching
   option. If a dropdown refuses to change, set it manually and tell the assistant.
 - **Stop** kills the process it spawned (by the PID listening on the API port).
-- Chat history is kept in the browser tab — reloading the page clears it (your Forge UI
-  settings persist regardless).
+- Chat history is kept in the browser tab — reloading the page clears it. Your Forge UI
+  settings are separate and persist regardless (see **Restore session** above).

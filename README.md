@@ -29,8 +29,11 @@ Everything upstream Forge / A1111 does — txt2img, img2img, inpainting/outpaint
 - **Self-bootstrapping**: `start.bat` downloads a portable Python, builds the venv, installs everything, and launches — a fresh clone needs no system Python and no manual setup. Re-runs are idempotent.
 - **Per-mode UI system** (`sd` / `xl` / `flux`): one click switches checkpoint, VAE/text-encoder modules, UI defaults, and prompt presets — **in place, without restarting** the server.
 - **Lazy-built tabs** for faster startup and lighter pages.
+- **Background-tab reliability.** Browsers pause `requestAnimationFrame` entirely in a hidden tab, and gradio's client awaits it on the submit path — so a generation could sit unstarted until you looked at the tab again. Timing that has to be correct runs off a Worker clock instead, which browsers don't throttle. On top of that: a submit that never starts raises a warning with a Retry button rather than a dead progress bar, and a page that has lost track of a run still in progress re-attaches to it and collects the image.
+- **Failures explain themselves.** Recognizable errors map to a plain-language tip that highlights the control at fault, and per-run hints (a flash-LoRA at the wrong CFG, a reserve that had to be clipped) appear under the image. Both are registries — `modules/error_tips.py` and `modules/generation_hints.py` — so a new case is one `register_tip()` / `@rule` away rather than a change to the generation path.
 - **Hardware-aware "Diffusion in Low Bits"**: on *Automatic*, the loader consults your GPU at model load — if the fp16 weights can't fit in VRAM and the platform supports it (NVIDIA), it stores the model in float8 automatically; models that fit stay at full quality. Pre-quantized checkpoints (GGUF/nf4/fp4) always keep their native format — a conflicting manual low-bits selection is ignored instead of crashing — and LoRAs on GGUF quant types that can't be re-quantized (e.g. Q6_K) fall back to online fp16 LoRA automatically instead of erroring.
 - **Included extensions** (see credits): Replacer (with a gradio-6 UI rework, per-mode prompt-chip presets editable in Settings, batch modes) and Segment Anything (transformers-5 compatible).
+- **Session memory**: **↺ Restore session** at the top of the page puts back the settings and prompts from your last session — every tab you used, plus the quicksettings (checkpoint, VAE/text encoders, clip skip) — and named **profiles** save a state you can re-apply across all tabs later. Saving happens by itself as you work, and a page you haven't touched never overwrites a stored session. (Shipped by the assistant extension; the chat itself always starts fresh.)
 - **AI assistant extension**: a chat panel that can read and drive the whole UI (set any control, run generations, judge results) through a local vision LLM served by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`. **Works out of the box**: a patched `llama-server` build (Windows/CUDA, with the `/sleep` + `/wake` endpoints that let the LLM free its VRAM while Forge generates) is bundled in `forge-llm/`, and the vision model (Qwen3-VL-30B, ~18 GB) **downloads automatically on first launch** to `models/llm/`. Set `FORGE_NO_LLM=1` before launching to skip that download if you don't want the assistant. Everything — provider, model, task guidance, all paths — is configurable under Settings → AI Assistant; you can point it at a different GGUF, your own `llama-server`, or the Claude API instead. On Linux/macOS the launcher **builds the patched server automatically on first run** (needs `git`, `cmake` and a C compiler; skipped gracefully if absent) — CUDA on NVIDIA, Vulkan on AMD, Metal on macOS. Verified on an AMD iGPU: the Vulkan build serves completions and the `/sleep`+`/wake` hibernate cycle preserves the KV cache. The **source patch and build instructions remain in [`forge-llm/patches/`](forge-llm/patches)** if you'd rather build manually or audit what the bundled Windows binary does.
 
 ## Requirements
@@ -92,12 +95,17 @@ You still supply your own Stable Diffusion checkpoints (see the layout below) �
 Model layout: checkpoints go in `models\checkpoints\sd|xl|flux\` (one folder per mode — the mode switcher scans the matching folder); LoRAs in `models\Lora`, VAEs in `models\VAE`, text encoders in `models\text_encoder`, upscalers in `models\ESRGAN`. Flux mode expects `ae.safetensors` in `models\VAE` and `clip_l.safetensors` + `t5xxl_fp8_e4m3fn.safetensors` in `models\text_encoder`. SAM/GroundingDINO detection models go in `extensions\sd-webui-segment-anything\models\sam` and `...\grounding-dino`.
 
 > **Flux VRAM note (11 GB cards).** Flux weights load whole, so the checkpoint has
-> to fit alongside the ~1 GB inference reserve. A q4 flux checkpoint generates
-> 512×512 in ~23 s on an 11 GB card (verified). A ~9.4 GB Q6_K checkpoint leaves
-> too little headroom and stalls with a `[Low GPU VRAM Warning]` — lower **GPU
-> Weights** at the top of the page, or use a smaller quant. Note the `fill`
-> checkpoints are *inpainting* models: use them from img2img/inpaint or Replacer,
-> not plain txt2img.
+> to fit alongside the working memory the run needs. That reserve is not a fixed
+> number: it is `max(your GPU Weights slider, an estimate from this run's
+> resolution, batch and architecture)`, and it is capped so that reserving for
+> activations can never push the weights themselves into CPU swap — the failure
+> that turned a 30-second generation into a two-hour one. A q4 flux checkpoint
+> generates 512×512 in ~23 s on an 11 GB card (verified). A ~9.4 GB Q6_K
+> checkpoint leaves too little headroom and stalls with a `[Low GPU VRAM
+> Warning]` — lower **GPU Weights** at the top of the page, or use a smaller
+> quant. When a run genuinely cannot fit, it now says so under the image instead
+> of thrashing silently. Note the `fill` checkpoints are *inpainting* models: use
+> them from img2img/inpaint or Replacer, not plain txt2img.
 
 ## Launch arguments
 

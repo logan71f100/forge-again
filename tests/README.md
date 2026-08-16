@@ -1,17 +1,33 @@
 # Pre-merge test harness
 
-Run this on `testing` before folding it into `main`. No third-party packages —
-plain stdlib, so it works anywhere Forge itself runs.
+Run this on `testing` before folding it into `main`. Every tier but the UI one
+is plain stdlib, so it works anywhere Forge itself runs; the UI tier needs
+Playwright and skips itself when it isn't installed.
+
+Day to day on `testing`, targeted checks are enough — a syntax pass, a `--static`
+run, a browser spot-check. The full suite is the **fold gate**: run it before
+merging into `main`, not per commit.
 
 ```
-run-tests.bat                        # Windows, everything
-python tests/run_tests.py            # everything (~20 s)
-python tests/run_tests.py --static   # tier 1 only (~1 s)
-python tests/run_tests.py --boot     # tier 2 only
-python tests/run_tests.py --list     # show checks, run nothing
+run-tests.bat                          # Windows, everything
+python tests/run_tests.py              # everything (~5 min)
+python tests/run_tests.py --static     # tier 1 only (~1 s)
+python tests/run_tests.py --boot       # tier 2 only
+python tests/run_tests.py --ui         # tier 3 only (browser; needs playwright)
+python tests/run_tests.py --gpu        # tier 4 only (needs a free GPU)
+python tests/run_tests.py --clean      # tier 5 only
+python tests/run_tests.py --quick      # static + clean, no server start
+python tests/run_tests.py --all-modes  # also generate in every mode (a minute each)
+python tests/run_tests.py --deep       # also exercise the portable-git bootstrap
+python tests/run_tests.py --list       # show checks, run nothing
 ```
 
-Exit code is non-zero if anything failed, so it can gate a merge.
+Exit code is non-zero if anything failed, so it can gate a merge. On a pass it
+prints `All good -- safe to fold testing into main.`
+
+Redirect the output if you want to read it as it goes: Python buffers stdout
+through a pipe, so `python -u` is what gives you live progress rather than
+everything at the end.
 
 ## Tier 1 — static (~1 s, no GPU)
 
@@ -24,7 +40,10 @@ Exit code is non-zero if anything failed, so it can gate a merge.
 | `privacy` | Personal or generated files becoming tracked by git — `config.json`, `outputs/`, `extra-args.txt` and friends. |
 | `pins` | Installed versions drifting from the `==` pins. Extension installers run on every startup and pull packages past their caps, so this drifts silently on a working machine. |
 | `classify` | The model downloader sorting a file into the wrong folder. Cases include the real regressions: `Kataragi_inpaintXL` (a ControlNet the "xl" rule used to claim as a checkpoint), `ae.safetensors` (the Flux VAE, which contains no "vae"), and the `JuggernautXL`-style names that broke when the XL match was made too strict. |
+| `error-tips` | A recognizable runtime error losing its plain-language tip, and the tip losing the field it highlights. |
+| `hints` | The `generation_hints` rule registry and `error_tips.register_tip` staying usable — these exist so failure messages can be extended without touching the generation path. |
 | `filesafety` | The downloader's move/delete escaping their folder or clobbering files. Asserts path traversal is rejected, a move never overwrites an existing destination, and delete removes exactly the target. |
+| `dl-e2e` | The download path end to end: actually fetches a file and confirms it lands in the right folder. |
 
 ## Tier 2 — boot (~15 s, no GPU needed)
 
@@ -69,6 +88,9 @@ server session is shared, so the checkpoint load is paid once.
 | `hires fix` | Hires returning the base resolution or a wrong aspect. Found a live bug: every API hires request 500'd. |
 | `inpaint` | A mask being **ignored or inverted**. Compares the masked region against the untouched one, so a plausible-but-wrong image still fails. This is the operation Replacer is built on. |
 | `img2img` | The input being passed through unchanged. |
+| `generation hints` | Hints stopping at the console instead of reaching the user — asserts a rule fires and its text arrives in the result's `comments`, which is what the UI renders under the image. |
+| `deepbooru` | The interrogator returning nothing, which is how its model-loading breaks present. |
+| `every mode` | `--all-modes` only: generates in every mode that has a checkpoint, so an sd- or flux-specific break shows up while you're working in xl. |
 
 ## Tier 4 — clean install (~30 s)
 
@@ -79,18 +101,53 @@ server session is shared, so the checkpoint load is paid once.
 | `release` | Boots the server from a `git archive` export — no `.git`, no dev files — which is what a downloader actually runs. Verified to fail when the "fatal: not a git repository" fix is reverted. Note it exports **committed HEAD**, so an uncommitted fix looks broken here. |
 | `gitboot` | `--deep` only: fetches portable git with git hidden and clones with it. |
 
+## Tier 5 — UI (~3 min, browser)
+
+Drives the real UI through Playwright (`pip install playwright && playwright
+install chromium`; the tier skips itself if it isn't installed). This is where
+this fork's recurring bugs live: gradio 6 mounts tabs on demand, so a control
+can exist, look normal, and quietly ignore every click.
+
+| Check | Catches |
+|---|---|
+| `page loads and hydrates` | A page that renders but never wires up. |
+| `prompt accepts input` | The most basic control losing its value. |
+| `send-to builds an unopened destination` | Send-to targeting a tab that hasn't been built yet — and the same thing from a **second** page session, which is what broke when process-wide paste registries kept the first session's dead component ids. |
+| `Settings / Extensions / Extras / Img2img render` | A tab failing to build at all. |
+| `hires-fix accordion toggles` | An InputAccordion that stops responding. |
+| `lazy tab controls are interactive` | The whole of img2img coming up non-interactive — gradio infers `interactive` from event wiring, which a `gr.render` body doesn't have yet. |
+| `session capture survives a tab switch` | The assistant's session capture missing values changed on a tab you have since left, or a nested tab selection ("Resize to / Resize by") it cannot see at all. Asserts the values reach `last_session.json` **on disk**. |
+| `restore re-selects a nested tab` | Restore putting settings back but not the tab selection that decides which of them the backend uses. |
+| `resize-mode radio responds` | A radio inside a lazily-built tab not toggling. |
+| `img2img canvas syncs an upload` | ForgeCanvas not writing the upload into the component value the backend reads. |
+| `detect-size reads dimensions` | The detect-size button not reaching the source image. |
+| `mode switch refreshes checkpoint list` | The sd/xl/flux switch not re-scanning, in both directions. |
+| `attributed error highlights its control` | An error losing the control it points at. |
+| `no new JavaScript errors` | Console errors beyond a known baseline. The baseline counts one instance per page load, so a check that reloads legitimately raises the count. |
+| `get_tab_index returns the real sub-tab` | Sub-tab index drift, which silently sends a generation to the wrong mode. |
+| `extra-networks search filters` | The Lora/Checkpoints search box vanishing or not filtering. |
+
+**Writing a UI check:** the tier shares ONE page across every check, so anything
+you leave behind lands on a later one — and it fails *there*, several checks
+away from the cause. Leaving a nested tab selected unmounts the pane a later
+check clicks in; opening the assistant panel floats it over the right-hand
+controls. End a disruptive check with `page.reload()` and re-open its tab rather
+than unwinding state by hand. Two Playwright traps specific to this UI: gradio
+renders more than one element per tab, so a bare `page.click('#x
+button:text-is("Y")')` trips strict mode, and adding `>> visible=true` then
+matches *nothing*, because headless reports tab-bar buttons as zero-box. Reach
+nested tabs through `page.evaluate` over the tab bar's direct children.
+
 ## Not covered yet
 
 Deliberate gaps, in rough priority order:
 
-- **UI regression** — driving the actual UI to catch gradio-6 issues like a
-  control that stops responding after a profile is applied. This is where the
-  recurring bugs in this fork have lived, and nothing below it can see them.
-- **Per-mode generation** — the GPU tier only exercises the current mode, so an
-  sd- or flux-specific break wouldn't show up while you're in xl.
 - **Docker image** — building and booting the container as part of the suite.
-- **The download path itself** — Civitai/HF resolution is covered, but nothing
-  actually downloads a file end to end.
+- **Generation from the UI** — the UI tier exercises controls, and the GPU tier
+  generates through the API, but nothing clicks Generate and waits for a real
+  image. The background-tab and progress-tracking bugs live in exactly that gap.
+- **Extension surfaces** — Replacer and Segment Anything have their own tabs and
+  neither is driven by the UI tier.
 
 ## Adding a check
 

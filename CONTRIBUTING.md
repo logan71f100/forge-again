@@ -24,10 +24,26 @@ and launch arguments.
 - **`main`** — the integration branch; open pull requests against it.
 - **`testing`** — work-in-progress that hasn't been promoted to `main` yet.
 
+## Tests
+
+There's a test harness in [`tests/`](tests/README.md) — static checks, a real
+server boot, a Playwright pass over the UI, and real generations on the GPU:
+
+```
+python tests/run_tests.py --static   # ~1 s, no server
+python tests/run_tests.py            # everything (~5 min, needs a free GPU)
+```
+
+Day to day, targeted checks are enough. The full suite is the gate before folding
+into `main`; it prints `All good -- safe to fold testing into main.` on a pass and
+exits non-zero on any failure.
+
 ## Before you open a PR
 
 - **Keep it focused.** One logical change per PR. Split unrelated cleanup out.
 - **Test the modes you touched** end to end (`sd` / `xl` / `flux` as applicable).
+- **Run at least `--static`**, and the full suite if you touched the UI, the
+  generation path, or the launchers.
 - **Include a screenshot** for anything visual — nearly every gradio-6 bug in this
   fork was caught from a screenshot plus a console traceback.
 - **Mind the gradio-6 gotchas.** The migration notes in [PORTING.md](PORTING.md) list

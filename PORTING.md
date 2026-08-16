@@ -70,6 +70,23 @@ item below is done and running.
 - Unqueued events (`queue=False`) travel over bare `/run/predict` whose responses
   can't carry a `gr.render` body or ordered queue results — keep tab-build gates
   and same-trigger state refreshes QUEUED.
+- Inside a `gr.render`, `Context.root_block` is **None** — use
+  `gradio.context.get_blocks_context()` instead. (ForgeCanvas hit this too.)
+- A `gr.render` body is built long AFTER `create_ui()` ran `setup_ui()`, so
+  anything that walks the component tree at build time — `ui-config.json` defaults
+  most of all — silently skips every lazily-built control. img2img ignored its
+  saved defaults entirely until `UiLoadsave.apply_saved_to_components()` was
+  applied from inside the render. Watch for the same shape in anything else that
+  runs once at page build.
+- Browsers **pause** `requestAnimationFrame` in a hidden tab (it doesn't fire
+  late — it doesn't fire), and Svelte 5's `tick()`, which gradio's client awaits
+  on the submit path, resolves on whichever of an rAF or a `setTimeout` lands
+  first. Hidden ⇒ the rAF half is dead and every await falls back to a throttled
+  timer. Anything on a correctness path must not depend on rAF or main-thread
+  timers; `javascript/forgeTimer.js` serves both off a Worker clock.
+- `webpath()` bakes an mtime cache-buster into the page head at UI-creation time,
+  so **editing a `.js` file needs a server restart** (or a hard refresh) before the
+  browser sees it — a plain reload silently serves the old file.
 
 ## transformers 5 API changes
 - `pkg_resources` gone (setuptools 81+) → `importlib.metadata`. Legacy deps
