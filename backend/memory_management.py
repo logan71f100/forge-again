@@ -105,7 +105,23 @@ def get_total_memory(dev=None, torch_total_too=False):
     if dev is None:
         dev = get_torch_device()
 
-    if hasattr(dev, 'type') and (dev.type == 'cpu' or dev.type == 'mps'):
+    if hasattr(dev, 'type') and dev.type == 'mps':
+        # Apple Silicon shares one pool between CPU and GPU, but reporting the
+        # WHOLE machine as VRAM is wrong for everything that budgets against
+        # this number: the per-run reserve caps itself at 60% of total_vram and
+        # at "total_vram minus the weights", so on a 32 GB Mac both caps landed
+        # around 19 GB and could never actually clip anything. Metal publishes
+        # what it is willing to hand the GPU -- use that, and fall back to a
+        # conservative share of RAM on torch builds too old to expose it.
+        mem_total = 0
+        try:
+            mem_total = int(torch.mps.recommended_max_memory())
+        except Exception:
+            mem_total = 0
+        if mem_total <= 0:
+            mem_total = int(psutil.virtual_memory().total * 0.7)
+        mem_total_torch = mem_total
+    elif hasattr(dev, 'type') and dev.type == 'cpu':
         mem_total = psutil.virtual_memory().total
         mem_total_torch = mem_total
     else:

@@ -49,12 +49,16 @@ EXAMPLES = {
 }
 
 def _vram_mb():
-    """Total VRAM of GPU 0 in MB via nvidia-smi, or None if unknowable.
+    """Total VRAM of GPU 0 in MB, or None if unknowable.
 
-    set_mode runs before torch exists (start scripts call it pre-venv), so the
-    driver tool is the only cheap probe. AMD/CPU setups return None and keep
-    the table value -- the in-app mode switch re-clamps with torch's number.
+    set_mode runs before torch exists (start scripts call it pre-venv), so this
+    has to be answered without torch. nvidia-smi covers NVIDIA on Windows and
+    Linux; it does not exist on AMD or macOS, and returning None there left the
+    profile's reserve UNSCALED in the config.json a fresh launch reads (only an
+    in-app mode switch re-clamped it, which a user who never switches never
+    triggers). So fall back to the platform's own numbers.
     """
+    # NVIDIA (Windows + Linux)
     try:
         import subprocess
         out = subprocess.run(
@@ -64,6 +68,38 @@ def _vram_mb():
             return int(out.stdout.strip().splitlines()[0])
     except Exception:
         pass
+
+    # AMD on Linux: the amdgpu driver exports this in sysfs, so no rocm-smi and
+    # no ROCm install is needed. Largest card wins (matches nvidia-smi's GPU 0
+    # convention closely enough for a reserve clamp).
+    try:
+        import glob
+        best = 0
+        for f in glob.glob("/sys/class/drm/card*/device/mem_info_vram_total"):
+            try:
+                with open(f) as fh:
+                    best = max(best, int(fh.read().strip()) // (1024 * 1024))
+            except (OSError, ValueError):
+                continue
+        if best:
+            return best
+    except Exception:
+        pass
+
+    # Apple Silicon: memory is unified, so "VRAM" is a slice of system RAM.
+    # Metal will not hand the whole machine to the GPU -- budget against a
+    # conservative share so the reserve clamp stays meaningful.
+    try:
+        import platform
+        if platform.system() == "Darwin":
+            import subprocess
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                 capture_output=True, text=True, timeout=10)
+            if out.returncode == 0:
+                return int(int(out.stdout.strip()) * 0.7) // (1024 * 1024)
+    except Exception:
+        pass
+
     return None
 
 

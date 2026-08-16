@@ -569,6 +569,40 @@ def preset_apply_and_refresh_checkpoint(preset=None):
     return gr.update(choices=ckpt_list, value=default_ckpt), gr.update(choices=vae_list, value=vae_value)
 
 
+def _mode_gpu_weights(mode):
+    """GPU Weights (MB) to SHOW for `mode`, kept in lockstep with the reserve.
+
+    The slider means "total VRAM minus the inference reserve", so its value and
+    shared.opts.forge_inference_memory are two views of ONE number. They were
+    computed from different sources: the mode switch wrote the profile's reserve
+    into forge_inference_memory, while this function pushed <mode>_GPU_MB, which
+    defaults to total-1024 and knows nothing about the profile. On a flux switch
+    the page therefore showed "reserve 1024" while the engine used 3072, and
+    because a programmatic gr.update does NOT fire the slider's .change handler,
+    nothing reconciled them -- the first nudge of the slider then overwrote the
+    profile's reserve with the number the UI had been showing all along.
+
+    Now: the mode profile wins on a switch (that is what switching asks for),
+    a <mode>_GPU_MB the user actually changed in Settings still wins over it,
+    and whichever wins is written back so the slider and the reserve agree.
+    """
+    reserve = getattr(shared.opts, 'forge_inference_memory', 1024)
+    model_mem = total_vram - reserve
+
+    key = f'{mode}_GPU_MB'
+    saved = getattr(shared.opts, key, None)
+    try:
+        default = shared.opts.get_default(key)
+    except Exception:
+        default = None
+    if saved is not None and 0 <= saved <= total_vram and saved != default:
+        model_mem = saved          # customised in Settings -- honour it
+
+    model_mem = int(max(0, min(total_vram, model_mem)))
+    shared.opts.set('forge_inference_memory', int(max(0, total_vram - model_mem)))
+    return model_mem
+
+
 def on_preset_change(preset=None):
     # NOTE: the actual mode switch (opts + files + model hot-swap) is done in-place by
     # preset_apply_and_refresh_checkpoint (wired first). This function only returns the
@@ -590,7 +624,7 @@ def on_preset_change(preset=None):
             gr.update(visible=False, value='Automatic'),                                # ui_forge_unet_storage_dtype_options
             gr.update(visible=False, value='Queue'),                                    # ui_forge_async_loading
             gr.update(visible=False, value='CPU'),                                      # ui_forge_pin_shared_memory
-            gr.update(visible=False, value=total_vram - 1024),                          # ui_forge_inference_memory
+            gr.update(visible=False, value=_mode_gpu_weights('sd')),                    # ui_forge_inference_memory
             gr.update(value=getattr(shared.opts, "sd_t2i_width", 512)),                 # ui_txt2img_width
             gr.update(value=getattr(shared.opts, "sd_i2i_width", 512)),                 # ui_img2img_width
             gr.update(value=getattr(shared.opts, "sd_t2i_height", 640)),                # ui_txt2img_height
@@ -608,9 +642,7 @@ def on_preset_change(preset=None):
         ]
 
     if current == 'xl':
-        model_mem = getattr(shared.opts, "xl_GPU_MB", total_vram - 1024)
-        if model_mem < 0 or model_mem > total_vram:
-            model_mem = total_vram - 1024
+        model_mem = _mode_gpu_weights('xl')
         return [
             gr.update(visible=True),                                                    # ui_vae
             gr.update(visible=False, value=1),                                          # ui_clip_skip
@@ -635,9 +667,7 @@ def on_preset_change(preset=None):
         ]
 
     if current == 'flux':
-        model_mem = getattr(shared.opts, "flux_GPU_MB", total_vram - 1024)
-        if model_mem < 0 or model_mem > total_vram:
-            model_mem = total_vram - 1024
+        model_mem = _mode_gpu_weights('flux')
         return [
             gr.update(visible=True),                                                    # ui_vae
             gr.update(visible=False, value=1),                                          # ui_clip_skip
