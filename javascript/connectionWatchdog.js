@@ -45,7 +45,22 @@
     var pendingSubmits = {};
 
     function markSubmitJoined() {
-        Object.keys(pendingSubmits).forEach(function (t) { pendingSubmits[t].joined = true; });
+        Object.keys(pendingSubmits).forEach(function (t) {
+            var s = pendingSubmits[t];
+            // This delta IS the diagnosis for "I switched off the tab and it
+            // didn't start generating until I switched back". A join seconds
+            // after the click means the request sat in a throttled tab; a
+            // prompt join means the stall is downstream, in delivery. Only the
+            // stalled case ever produced a log line before, and only after a
+            // 15s timeout -- so a stall that eventually resolved on refocus
+            // left no trace at all.
+            if (!s.joined) {
+                slog('queue join for ' + t + ' landed ' +
+                     ((Date.now() - s.t) / 1000).toFixed(1) + 's after the click' +
+                     ' (hidden at click: ' + s.hidden + ', hidden now: ' + document.hidden + ')');
+            }
+            s.joined = true;
+        });
     }
     function markSubmitStarted() {
         Object.keys(pendingSubmits).forEach(function (t) { pendingSubmits[t].started = true; });
@@ -563,7 +578,22 @@
 
         // Re-check the instant the tab regains focus/visibility, so returning to a
         // backgrounded tab recovers a stuck generation right away.
-        document.addEventListener('visibilitychange', function () { if (!document.hidden) ping(); });
+        // Every stall report so far has been "I switched away and came back",
+        // and nothing in the log said when that happened -- so a 40s gap
+        // between events could equally have been a hung stream or a tab that
+        // was simply in the background. Timestamp both edges.
+        var hiddenSince = document.hidden ? Date.now() : 0;
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) {
+                hiddenSince = Date.now();
+                slog('tab hidden');
+            } else {
+                slog('tab visible again after ' +
+                     (hiddenSince ? ((Date.now() - hiddenSince) / 1000).toFixed(1) : '?') + 's');
+                hiddenSince = 0;
+                ping();
+            }
+        });
         window.addEventListener('focus', ping);
         window.addEventListener('online', ping);
         window.addEventListener('offline', function () { setOnline(false); });
