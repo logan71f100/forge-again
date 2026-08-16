@@ -901,7 +901,14 @@ class ServerSession:
 
         json.dump(data, open(settings, "w", encoding="utf-8"), indent=4)
         env = dict(os.environ)
-        env.update(FORGE_NO_LLM="1", SD_WEBUI_RESTARTING="1", PYTHONUNBUFFERED="1")
+        env.update(FORGE_NO_LLM="1", SD_WEBUI_RESTARTING="1", PYTHONUNBUFFERED="1",
+                   # Only config.json was being isolated. The UI tier opens
+                   # img2img, clicks around inside it and generates at 128x128,
+                   # and the assistant faithfully captured all of that into the
+                   # REAL last_session.json -- so a later restore dragged the
+                   # user into an img2img tab they had never configured, and
+                   # paid the cost of building it. Give the harness its own.
+                   FORGE_AI_SESSION_FILE=os.path.join(self.tmp, "last_session.json"))
 
         cmd = [venv_python(), "launch.py", "--port", str(self.port), "--api",
                "--skip-install", "--skip-python-version-check", "--no-half-vae",

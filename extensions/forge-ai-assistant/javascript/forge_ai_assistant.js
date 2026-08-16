@@ -3240,7 +3240,15 @@
                 // A tab that earned its place in the stored session keeps it:
                 // without this, the first save of a new boot would drop every
                 // tab the user had not yet re-edited.
-                for (const t of (r.state.uiEditedTabs || Object.keys(stored))) uiEditedTabs.add(t);
+                //
+                // Deliberately NOT falling back to Object.keys(stored) when the
+                // field is absent. A session written before this existed has no
+                // record of WHERE its edits happened, and treating every tab in
+                // it as edited re-admitted precisely the tabs the gate exists to
+                // remove -- permanently, since restoring then re-marks them as
+                // edited. A legacy session re-earns a tab the moment it is
+                // actually touched, which is the whole point.
+                for (const t of (r.state.uiEditedTabs || [])) uiEditedTabs.add(t);
             } catch (e) { /* no stored session yet */ }
 
             // The connection watchdog reloads the page by itself when the server

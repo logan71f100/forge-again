@@ -905,7 +905,14 @@ def _stop_textgen(mode="soft"):
 MEMORY_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai_memory.json")
 
 # Forge UI snapshot (settings & prompts per tab) — restored by the ↺ button.
-SESSION_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "last_session.json")
+# The test harness copies config.json to a temp file so a run can never touch
+# personal settings, but this lived at a fixed path and was written by every
+# UI-tier run -- which opens img2img, clicks around inside it and generates at
+# 128x128. That is how a tab nobody had configured got into a real session, and
+# from there into a real restore. Honour an override so the harness can isolate
+# it the same way.
+SESSION_FILE = os.environ.get("FORGE_AI_SESSION_FILE") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "last_session.json")
 
 # The bot's own state (chat, run log, best/reference images) — autosaved and
 # auto-restored every session until the user clears it with the 🗑 button.
