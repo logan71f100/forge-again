@@ -343,6 +343,12 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 // the run is alive and holding on the sampler thread; the
                 // preview under the bar is what there is to judge
                 stage = 'Paused after first preview — Resume or Cancel';
+                // and ONLY that. The server sets its own textinfo while paused
+                // and the last percentage is still standing, so all three used
+                // to concatenate into "Paused after first preview — Resume or
+                // Cancel Paused after the first preview 38% ETA: 16s".
+                info = '';
+                progressText = '';
             } else if (res.active) {
                 if (!res.progress && !info) stage = 'Loading…';
             } else if (res.queued) {
