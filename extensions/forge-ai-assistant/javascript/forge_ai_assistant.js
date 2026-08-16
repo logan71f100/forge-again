@@ -3114,6 +3114,22 @@
                     uiSnapshots[tab] = Object.assign({}, snap, uiSnapshots[tab] || {});
                 }
             } catch (e) { /* no stored session yet */ }
+
+            // The connection watchdog reloads the page by itself when the server
+            // comes back with a new boot id. That reload is not something the
+            // user asked for -- they were mid-session and the server went away --
+            // and it only carried the PROMPTS across, so everything else came
+            // back at defaults and had to be clicked back by hand. When the
+            // watchdog leaves this note, put the session back automatically.
+            // Cleared first: a restore that fails must not retry on every reload.
+            try {
+                if (sessionStorage.getItem('fa-restore-after-reload')) {
+                    sessionStorage.removeItem('fa-restore-after-reload');
+                    await sleep(1200);            // let the tabs finish mounting
+                    sysMsg('↻ The server restarted and the page reloaded — putting your settings back.');
+                    await restoreSession();
+                }
+            } catch (e) { /* restore is best-effort */ }
         })();
 
         // restore messages that were still queued (never made it into the chat)

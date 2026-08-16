@@ -501,6 +501,13 @@
         if (sessionStorage.getItem('fa-reloaded-for') === newBootId) return;   // already reloaded once for this boot
         sessionStorage.setItem('fa-reloaded-for', newBootId);
         savePrompts();
+        // This reload is OURS, not the user's: they did not ask for a fresh page,
+        // the server went away underneath them. savePrompts() only carries the
+        // prompt text over, so everything else -- sampler, steps, sizes, the
+        // img2img mode, ControlNet -- came back at defaults and had to be
+        // recovered by hand with Restore session. Leave a note so the assistant
+        // puts the whole session back by itself.
+        try { sessionStorage.setItem('fa-restore-after-reload', '1'); } catch (e) { /* storage unavailable */ }
         forgeNotify.warn('↻ Server restarted — reloading the UI…', { id: 'fa-conn', timeout: 0 });
         setTimeout(function () { location.reload(); }, 800);
     }
