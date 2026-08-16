@@ -130,8 +130,18 @@
     // are hidden but still fully settable — include them in the scan. Inactive
     // top-level sub-tabs (img2img vs inpaint vs batch) must stay excluded, but
     // unit tabs nested inside an accordion (ControlNet Unit 0/1/2) are included.
+    // Set only while CAPTURING (see captureUiSnapshot). A mounted-but-hidden
+    // control still holds a perfectly real value -- mode-gated ones are the
+    // obvious case (Distilled CFG is hidden outside flux). Skipping them on
+    // capture meant their entry was never refreshed, and because snapshots
+    // MERGE, a value captured long ago survived forever: a Distilled CFG since
+    // set to 4 kept restoring as a stale 0.2. Visibility matters for APPLYING a
+    // value (set() reveals first), not for reading one.
+    let scanIncludeHidden = false;
+
     function scannable(el) {
         if (!el || el.closest('#fai-panel') || el.closest('.fai-profile-row')) return false;
+        if (scanIncludeHidden) return true;
         if (visible(el)) return true;
         let n = el.parentElement;
         while (n && n !== document.body) {
@@ -543,6 +553,56 @@
                         cb.dispatchEvent(new Event('change', { bubbles: true }));
                         await sleep(120);
                     }
+                }
+            });
+        });
+
+        // nested tab groups ("Resize to" / "Resize by", ControlNet unit tabs).
+        // Which tab is selected IS a setting -- img2img_tabs_resize decides
+        // whether the backend uses Width/Height or Scale -- but a tab bar holds
+        // buttons, not inputs, so every pass above walked straight past it and
+        // "Resize by" could never be saved or restored.
+        //
+        // Only groups carrying an elem_id are eligible. A positional fallback
+        // name ("Tab #3") would point at a DIFFERENT group as soon as another
+        // bar mounts or unmounts, and replaying a tab selection is a CLICK --
+        // getting it wrong changes what the UI is showing. The extra-networks
+        // picker (Generation / Lora / Checkpoints) is skipped outright: it is a
+        // browsing pane, not a setting, and re-selecting Lora on restore drags
+        // the card list back open.
+        root.querySelectorAll('.tab-nav, [role=tablist]').forEach(bar => {
+            if (seenBlocks.has(bar) || !scannable(bar)) return;
+            // direct children only -- a nested tab PANE under this bar would
+            // otherwise donate its own buttons to this bar's option list
+            const btns = [...bar.children]
+                .filter(b => b.matches('button, [role=tab]') && b.textContent.trim());
+            if (btns.length < 2) return;
+            const selected = () => btns.find(b => b.classList.contains('selected')
+                || b.getAttribute('aria-selected') === 'true');
+            // name it from the gr.Tabs elem_id ("img2img_tabs_resize" -> "tabs
+            // resize") so the label is stable across boots and across tabs
+            // NOT .tab-wrapper: it sits between the bar and the .tabs element
+            // that actually carries the elem_id, so closest() would stop there
+            // and every group would end up named "Tab"
+            const wrap = bar.closest('.gradio-tabs') || bar.closest('.tabs');
+            const wid = (wrap && wrap.id) ? wrap.id : '';
+            if (!wid || /_extra_tabs$/.test(wid)) return;
+            seenBlocks.add(bar);
+            register({
+                kind: 'tab',
+                el: bar,
+                label: wid.replace(/^(img2img|txt2img)_/, '').replace(/_/g, ' '),
+                options: btns.map(b => b.textContent.trim()),
+                get: () => { const s = selected(); return s ? s.textContent.trim() : ''; },
+                set: async (v) => {
+                    const want = String(v).toLowerCase().trim();
+                    const hit = btns.find(b => b.textContent.trim().toLowerCase() === want)
+                        || btns.find(b => b.textContent.trim().toLowerCase().includes(want));
+                    if (!hit) throw new Error(`no tab named "${v}"`);
+                    if (hit === selected()) return;
+                    await revealControl(hit);
+                    hit.click();
+                    await sleep(250);
                 }
             });
         });
@@ -2007,24 +2067,56 @@
         try {
             const tab = currentTabName();
             if (!tab || tab === 'unknown' || UI_SKIP_TABS.test(tab)) return;
-            const snap = {};
-            lastScanKinds = {};
-            for (const c of scanControls()) {
-                try {
-                    const v = c.get();
-                    // settings only — never image data or absurd blobs
-                    if (typeof v === 'string' && (v.length > 1500 || v.startsWith('data:'))) continue;
-                    snap[c.label] = v;
-                    lastScanKinds[c.kind] = (lastScanKinds[c.kind] || 0) + 1;
-                } catch (e) { /* unreadable control */ }
+
+            // Scan EVERY mounted top-level tab, not just the active one.
+            //
+            // gradio 6 builds a tab on first open and then keeps it in the DOM,
+            // merely hidden -- so by the time the user quits, every tab they
+            // touched is still readable. Capturing only the active one meant a
+            // change made in Img2img was lost the moment they clicked over to
+            // Txt2img and a save fired from there; the session then kept
+            // whatever Img2img values happened to be captured last, which is
+            // how settings "came back wrong" after a restore.
+            const roots = [];
+            for (const el of gradioApp().querySelectorAll('[id^="tab_"]')) {
+                if (el.id.endsWith('-button')) continue;
+                let btn = null;
+                try { btn = gradioApp().querySelector('#' + CSS.escape(el.id + '-button')); } catch (e) { /* odd id */ }
+                const name = btn ? btn.textContent.trim() : null;
+                if (!name || UI_SKIP_TABS.test(name)) continue;
+                roots.push({ name, el });
             }
-            // remember which SUB-tab was active (img2img vs Inpaint vs Sketch…):
-            // controls inside inactive sub-tabs aren't scannable, so restore
-            // must return to the same sub-tab before applying values
-            try {
-                const st = [...activeTabRoot().querySelectorAll('.tab-nav button.selected, [role=tab][aria-selected="true"]')].find(visible);
-                if (st) snap['__subtab'] = st.textContent.trim();
-            } catch (e) { /* no sub-tabs here */ }
+            if (!roots.length) roots.push({ name: tab, el: activeTabRoot() });
+
+            let snap = {};
+            lastScanKinds = {};
+            for (const { name, el } of roots) {
+                const tabSnap = {};
+                scanIncludeHidden = true;
+                let scanned;
+                try { scanned = scanControls(el); } finally { scanIncludeHidden = false; }
+                for (const c of scanned) {
+                    try {
+                        const v = c.get();
+                        // settings only — never image data or absurd blobs
+                        if (typeof v === 'string' && (v.length > 1500 || v.startsWith('data:'))) continue;
+                        tabSnap[c.label] = v;
+                        lastScanKinds[c.kind] = (lastScanKinds[c.kind] || 0) + 1;
+                    } catch (e) { /* unreadable control */ }
+                }
+                // remember which SUB-tab was active (img2img vs Inpaint vs Sketch…):
+                // controls inside inactive sub-tabs aren't scannable, so restore
+                // must return to the same sub-tab before applying values
+                try {
+                    const st = [...el.querySelectorAll('.tab-nav button.selected, [role=tab][aria-selected="true"]')]
+                        .find(b => name === tab ? visible(b) : true);
+                    if (st) tabSnap['__subtab'] = st.textContent.trim();
+                } catch (e) { /* no sub-tabs here */ }
+                if (name === tab) snap = tabSnap;             // handled below, with uiActiveTab
+                else if (Object.keys(tabSnap).length) {
+                    uiSnapshots[name] = Object.assign({}, uiSnapshots[name] || {}, tabSnap);
+                }
+            }
             // Quicksettings (Checkpoint / VAE / Clip skip / mode radio) live
             // OUTSIDE every tab, so the per-tab scan above never captures them --
             // restore could not change the model back. Capture them under a
@@ -2034,7 +2126,10 @@
                 const qsRoot = gradioApp().querySelector('#quicksettings');
                 if (qsRoot) {
                     const qsnap = {};
-                    for (const c of scanControls(qsRoot)) {
+                    scanIncludeHidden = true;
+                    let qscanned;
+                    try { qscanned = scanControls(qsRoot); } finally { scanIncludeHidden = false; }
+                    for (const c of qscanned) {
                         try {
                             const v = c.get();
                             if (typeof v === 'string' && (v.length > 1500 || v.startsWith('data:'))) continue;
@@ -2106,10 +2201,13 @@
                         || findControl(controls, label);
                     if (c) found.push([label, value, c]);
                 }
-                const prio = { checkbox: 0, radio: 1, dropdown: 2 };
+                // 'tab' ranks with the toggles: selecting a tab MOUNTS its
+                // contents (gradio 6 keeps only the active one), so it has to
+                // happen before the values living inside it are looked for.
+                const prio = { checkbox: 0, tab: 0, radio: 1, dropdown: 2 };
                 found.sort((a, b) => (prio[a[2].kind] ?? 3) - (prio[b[2].kind] ?? 3));
                 for (const [label, value, c] of found) {
-                    if (pass === 1 && c.kind !== 'checkbox' && c.kind !== 'radio') continue;
+                    if (pass === 1 && c.kind !== 'checkbox' && c.kind !== 'radio' && c.kind !== 'tab') continue;
                     // type guard: a fuzzy label match must never write a value of the
                     // wrong shape (e.g. "true" into a slider — range inputs silently
                     // reset to their MIDPOINT on invalid values, which is how Width
@@ -2216,8 +2314,14 @@
     // bot itself (chat, run log, best/reference images) deliberately starts
     // FRESH each session — restore never brings the old conversation back.
     function autosaveSession() {
-        clearTimeout(sessionSaveTimer);
-        sessionSaveTimer = setTimeout(async () => {
+        // Worker-paced: this is a 3s debounce, and browsers throttle
+        // main-thread timers in a hidden tab -- exactly the moment a save
+        // matters most (the user switched away). A throttled debounce could
+        // sit unfired for up to a minute, and any capture it was carrying was
+        // simply lost if the page went away first.
+        const _ft = (typeof forgeTimer !== 'undefined') ? forgeTimer : null;
+        if (_ft) _ft.clearTimeout(sessionSaveTimer); else clearTimeout(sessionSaveTimer);
+        const _later = async () => {
             try {
                 captureUiSnapshot();   // fold in the latest control values
                 if (!Object.keys(uiSnapshots).length) return;   // never clobber a good save with nothing
@@ -2227,7 +2331,8 @@
                     uiActiveTab: uiActiveTab,
                 }, 60000);
             } catch (e) { /* autosave is best-effort */ }
-        }, 3000);
+        };
+        sessionSaveTimer = _ft ? _ft.setTimeout(_later, 3000) : setTimeout(_later, 3000);
     }
 
     // Restores Forge UI state ONLY (settings & prompts across all saved tabs).
@@ -2991,6 +3096,26 @@
         } catch (e) { /* corrupt save — start fresh */ }
         if (!restoredFromTab) botRestoreLatest();
 
+        // Seed the snapshot map from the stored session WITHOUT touching the UI.
+        //
+        // uiSnapshots was previously seeded only by an explicit Restore click,
+        // so a session where the user never clicked Restore autosaved a map
+        // holding just the tabs they happened to open -- and that replaced the
+        // stored file wholesale. Every tab they did not visit silently fell out
+        // of the session, one boot at a time. Seeding first makes autosave
+        // ADDITIVE: this session's values win, everything else is carried over.
+        // Nothing is applied to any control here -- this is bookkeeping only.
+        (async () => {
+            try {
+                const r = await apiJSON('/forge-ai/session/latest', undefined, 60000);
+                const stored = r && r.exists && r.state && r.state.uiSnapshots;
+                if (!stored) return;
+                for (const [tab, snap] of Object.entries(stored)) {
+                    uiSnapshots[tab] = Object.assign({}, snap, uiSnapshots[tab] || {});
+                }
+            } catch (e) { /* no stored session yet */ }
+        })();
+
         // restore messages that were still queued (never made it into the chat)
         // when the page reloaded — e.g. the first question of a session sent
         // while the LLM was cold-booting. Re-queue and process them.
@@ -3027,6 +3152,38 @@
         const markUiDirty = (ev) => { if (ev && ev.isTrusted) { uiDirty = true; userTouched = true; } };
         gradioApp().addEventListener('input', markUiDirty, true);
         gradioApp().addEventListener('change', markUiDirty, true);
+
+        // Snapshot the tab we are LEAVING, before its controls unmount.
+        //
+        // captureUiSnapshot() can only read the ACTIVE tab (gradio 6 unmounts
+        // the rest), and the 5s poll additionally skips while a generation runs
+        // or the tab is hidden. So a value changed and then followed by a tab
+        // switch -- or by hitting Generate -- was never snapshotted, and because
+        // snapshots MERGE, the previous value survived in the session forever.
+        // Detection is STRUCTURAL, not identity-based: the page renders more
+        // than one element per tab (a nav button and a role=tab), so comparing
+        // against topTabButtons() silently missed the one actually clicked.
+        // Capture is cheap and idempotent, so over-capturing beats missing.
+        const captureBeforeLeaving = (ev) => {
+            // Same guard the unload beacon uses: on a page nobody has typed into,
+            // every control still reads its ui-config DEFAULT. Saving that would
+            // merge defaults over the stored session and quietly destroy it
+            // before the user ever got to press Restore.
+            if (!userTouched || !ev.isTrusted || uiRestoring) return;
+            const t = ev.target;
+            if (!t || !t.closest) return;
+            const isGenerate = !!t.closest('button[id$="_generate"]');
+            const btn = t.closest('button, [role=tab]');
+            const isTab = !!btn && !!btn.closest('.tab-nav, .tab-wrapper, .tabs');
+            if (!isGenerate && !isTab) return;
+            try {
+                captureUiSnapshot(true);   // force: bypasses the `busy` guard
+                uiDirty = false;
+                autosaveSession();
+            } catch (e) { /* never block the click */ }
+        };
+        gradioApp().addEventListener('click', captureBeforeLeaving, true);
+        document.addEventListener('click', captureBeforeLeaving, true);
         setInterval(() => {
             if (!uiDirty || document.hidden || busy || uiRestoring) return;
             uiDirty = false;

@@ -947,6 +947,17 @@ def _session_save(state):
                 # downgrade-looking save: preserve the richer state as .prev
                 with open(SESSION_FILE + ".prev", "w", encoding="utf-8") as f:
                     json.dump(old, f)
+            # MERGE per tab rather than replace. The page can only ever capture
+            # the tab that is mounted, so a save legitimately carries a SUBSET
+            # of what the user has configured; writing it verbatim quietly threw
+            # away every other tab. Incoming values win; anything the payload
+            # does not mention is carried forward. (Stale labels are harmless --
+            # restore matches by label and skips what it cannot find.)
+            merged = dict(old_tabs)
+            for tab, snap in new_tabs.items():
+                merged[tab] = {**(old_tabs.get(tab) or {}), **(snap or {})}
+            state = dict(state)
+            state["uiSnapshots"] = merged
     except Exception:
         pass
     tmp = SESSION_FILE + ".tmp"

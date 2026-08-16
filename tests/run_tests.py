@@ -1640,6 +1640,94 @@ def check_ui_regression() -> None:
             except Exception as e:
                 record("ui: lazy tab controls are interactive", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
 
+            # --- session capture must survive leaving the tab ----------------
+            # Three separate bugs made "Restore session" come back with stale
+            # values, and all three are invisible from a single tab:
+            #   * only the ACTIVE tab was scanned, so a change made in Img2img
+            #     was lost the moment a save fired from Txt2img;
+            #   * the 3s autosave debounce ran on a main-thread timer, which the
+            #     browser throttles in a background tab -- the tab Forge spends
+            #     most of its life in;
+            #   * nested gr.Tabs ("Resize to" / "Resize by") were not a control
+            #     kind at all, so that choice was never saved in the first place.
+            # The assertion is deliberately end-to-end: change values, leave the
+            # tab, and require them to land in last_session.json on disk.
+            try:
+                import time as _time
+                sess_file = os.path.join(ROOT, "extensions", "forge-ai-assistant",
+                                         "last_session.json")
+                # this is the user's real session file -- put it back afterwards
+                backup = open(sess_file, "rb").read() if os.path.exists(sess_file) else None
+                try:
+                    page.click('button[role=tab]:text-is("Img2img")', timeout=15000)
+                    page.wait_for_timeout(2500)
+                    # a TRUSTED edit: the capture path deliberately ignores pages
+                    # nobody has touched, so that a fresh load can never overwrite
+                    # a real session with ui-config defaults
+                    page.fill("#img2img_distilled_cfg_scale input[type=number]", "6.5",
+                              timeout=10000)
+                    page.wait_for_timeout(300)
+                    page.click('#img2img_tabs_resize button:text-is("Resize by")', timeout=10000)
+                    page.wait_for_timeout(500)
+                    before_mtime = os.path.getmtime(sess_file) if os.path.exists(sess_file) else 0
+                    # leaving the tab is the moment capture has to fire
+                    page.click('button[role=tab]:text-is("Txt2img")', timeout=15000)
+                    saved = None
+                    for _ in range(40):          # debounce is 3s; allow generous slack
+                        page.wait_for_timeout(500)
+                        if os.path.exists(sess_file) and os.path.getmtime(sess_file) > before_mtime:
+                            try:
+                                saved = json.load(open(sess_file, encoding="utf-8"))
+                            except Exception:
+                                continue         # caught mid-write
+                            break
+                    snap = ((saved or {}).get("uiSnapshots") or {}).get("Img2img") or {}
+                    if saved is None:
+                        record("ui: session capture survives a tab switch", FAIL,
+                               "no save reached the server within 20s of leaving the tab")
+                    elif snap.get("tabs resize") != "Resize by":
+                        record("ui: session capture survives a tab switch", FAIL,
+                               f"nested tab group not captured: {snap.get('tabs resize')!r}")
+                    elif str(snap.get("Distilled CFG Scale")) != "6.5":
+                        record("ui: session capture survives a tab switch", FAIL,
+                               "value changed in Img2img was not captured when saving from"
+                               f" Txt2img: {snap.get('Distilled CFG Scale')!r}")
+                    else:
+                        record("ui: session capture survives a tab switch", PASS,
+                               "off-tab values and nested tab selection both saved")
+
+                    # --- and restore must put the nested tab back --------------
+                    if saved is not None:
+                        page.reload(wait_until="domcontentloaded", timeout=120000)
+                        page.wait_for_timeout(4000)
+                        page.click("#fai-restore-session", timeout=15000)
+                        got = None
+                        for _ in range(40):
+                            page.wait_for_timeout(500)
+                            got = page.evaluate("""() => {
+                                const b = document.querySelector(
+                                    '#img2img_tabs_resize .tab-nav, #img2img_tabs_resize [role=tablist]');
+                                if (!b) return null;
+                                const s = [...b.children].find(x =>
+                                    x.classList.contains('selected') ||
+                                    x.getAttribute('aria-selected') === 'true');
+                                return s ? s.textContent.trim() : null;
+                            }""")
+                            if got == "Resize by":
+                                break
+                        if got == "Resize by":
+                            record("ui: restore re-selects a nested tab", PASS)
+                        else:
+                            record("ui: restore re-selects a nested tab", FAIL,
+                                   f"resize tab came back as {got!r}, not 'Resize by'")
+                finally:
+                    if backup is not None:
+                        with open(sess_file, "wb") as f:
+                            f.write(backup)
+            except Exception as e:
+                record("ui: session capture survives a tab switch", FAIL,
+                       f"{type(e).__name__}: {str(e)[:160]}")
+
             # --- a radio in a lazy tab must actually toggle -------------------
             try:
                 before = page.evaluate(
