@@ -1,5 +1,6 @@
 import torch
 import math
+import time
 import itertools
 
 from tqdm import trange
@@ -148,12 +149,48 @@ class VAE:
             memory_management.load_models_gpu([self.patcher], memory_required=request)
             free_memory = memory_management.get_free_memory(self.device)
             batch_number = int(free_memory / memory_used)
+            # CALIBRATION (temporary): what the estimate claims, what is really
+            # free, and -- after the decode -- what it actually peaked at. The
+            # estimate is a deliberate worst case (2178*h*w*64*dtype, ~5.7 GB for
+            # a 1304x1000 fp16 decode), so "estimate exceeds free" cannot on its
+            # own decide to tile until we know how conservative it is.
+            # Measured 2026-08-16 on an 11 GB card, Chroma resident: this
+            # batch_number is 0 for EVERY decode from 1024x1024 upward, including
+            # ones that finish in 1.4 s. memory_used is a whole-VAE worst case
+            # (8.7 GB at 1 MP, 10.8 GB at 1304x1000) used to SPLIT BATCHES, and on
+            # a consumer card it never approaches free memory -- so it says
+            # nothing about whether one image fits, and tiling on `< 1` would
+            # tile every single run. What actually matters is the MARGINAL cost
+            # of the decode against what is free, which is what this logs.
+            _mb = lambda b: b / (1024 * 1024)
+            _t0 = time.time()
+            _cuda = torch.cuda.is_available() and self.device.type == 'cuda'
+            _alloc0 = torch.cuda.memory_allocated(self.device) if _cuda else 0
+            if _cuda:
+                torch.cuda.reset_peak_memory_stats(self.device)
             batch_number = max(1, batch_number)
 
             pixel_samples = torch.empty((samples_in.shape[0], 3, round(samples_in.shape[2] * self.downscale_ratio), round(samples_in.shape[3] * self.downscale_ratio)), device=self.output_device)
             for x in range(0, samples_in.shape[0], batch_number):
                 samples = samples_in[x:x + batch_number].to(self.vae_dtype).to(self.device)
                 pixel_samples[x:x + batch_number] = torch.clamp((self.first_stage_model.decode(samples).to(self.output_device).float() + 1.0) / 2.0, min=0.0, max=1.0)
+            # Report only when it MATTERS -- a decode that is slow, or one that
+            # asked for more than was free. Measured 2026-08-16 (Chroma, 11 GB
+            # card, 5 resolutions from 1304x1000 to 2304x1728): the marginal
+            # cost is 0.1563 MB per latent pixel for fp16, to four figures, and
+            # exceeding free VRAM degrades GRACEFULLY -- 4.3 GB over cost 7.7 s,
+            # because the memory manager evicts the diffusion model to make room.
+            # So overshoot alone is NOT the "stuck at the VAE" report; something
+            # else has to be holding the VRAM that eviction would otherwise free
+            # (the assistant's llama-server is the standing suspect). This line
+            # is what will say so, from a real occurrence, in one look.
+            _dt = time.time() - _t0
+            if _cuda:
+                _marginal = torch.cuda.max_memory_allocated(self.device) - _alloc0
+                if _dt > 2.0 or _marginal > free_memory:
+                    print(f"[VAE decode] latent {tuple(samples_in.shape[-2:])} took {_dt:.2f}s "
+                          f"-- needed {_mb(_marginal):.0f} MB on top of "
+                          f"{_mb(_alloc0):.0f} MB resident, {_mb(free_memory):.0f} MB was free")
         except memory_management.OOM_EXCEPTION as e:
             print("Warning: Ran out of memory when regular VAE decoding, retrying with tiled VAE decoding.")
             pixel_samples = self.decode_tiled_(samples_in)
