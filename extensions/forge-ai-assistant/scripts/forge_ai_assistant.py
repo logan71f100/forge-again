@@ -954,7 +954,7 @@ _UI_CONFIG_TAB_ALIAS = {
     "model downloader": "model_downloader",
 }
 
-_ui_config_cache = {"mtime": None, "exact": None, "labels": None}
+_ui_config_cache = {"mtime": None, "exact": None, "labels": None, "steps": None}
 
 
 def _ui_config_index():
@@ -967,38 +967,43 @@ def _ui_config_index():
     ("modelmerger", "pnginfo") or a capitalised name ("Replacer"). Indexing on
     the LAST TWO path segments catches all of them at once.
     """
+    empty = ({}, {}, {})
     try:
         mtime = os.path.getmtime(UI_CONFIG_FILE)
     except OSError:
-        return {}, {}
+        return empty
     if _ui_config_cache["mtime"] == mtime:
-        return _ui_config_cache["exact"], _ui_config_cache["labels"]
-    exact, labels = {}, {}
+        return (_ui_config_cache["exact"], _ui_config_cache["labels"],
+                _ui_config_cache["steps"])
+    exact, labels, steps = {}, {}, {}
     try:
         with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception:
-        return {}, {}
+        return empty
     for key, val in (cfg or {}).items():
-        if not key.endswith("/value"):
-            continue
-        parts = key[: -len("/value")].split("/")
-        if len(parts) < 2:
-            continue
-        tab, label = parts[-2].strip().lower(), parts[-1].strip()
-        exact.setdefault((tab, label), set()).add(str(val))
-        labels.setdefault(tab, set()).add(label)
-    _ui_config_cache.update({"mtime": mtime, "exact": exact, "labels": labels})
-    return exact, labels
+        for suffix, sink in (("/value", exact), ("/step", steps)):
+            if not key.endswith(suffix):
+                continue
+            parts = key[: -len(suffix)].split("/")
+            if len(parts) < 2:
+                continue
+            tab, label = parts[-2].strip().lower(), parts[-1].strip()
+            sink.setdefault((tab, label), set()).add(str(val))   # list defaults are unhashable
+            if sink is exact:
+                labels.setdefault(tab, set()).add(label)
+    _ui_config_cache.update({"mtime": mtime, "exact": exact, "labels": labels,
+                             "steps": steps})
+    return exact, labels, steps
 
 
-def _known_default(exact, labels, tabs, label):
-    """The recorded default(s) for a control, or None if we cannot tell."""
+def _match_key(exact, labels, tabs, label):
+    """The (tab, label) ui-config records this captured control under, or None."""
     base = _norm_label(label)
     for tab in tabs:
         for cand in (label, base):
             if (tab, cand) in exact:
-                return exact[(tab, cand)]
+                return (tab, cand)
     # Some captured labels append the control's description ("Schedule bias
     # Shifts when preservation of original content occurs..."); match the
     # longest recorded label our label starts with.
@@ -1009,8 +1014,57 @@ def _known_default(exact, labels, tabs, label):
                 if best is None or len(recorded) > len(best):
                     best = recorded
         if best is not None:
-            return exact.get((tab, best))
+            return (tab, best)
     return None
+
+
+def _as_number(val):
+    try:
+        return float(str(val).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_default_value(val, known, step):
+    """Is this captured value the recorded default?
+
+    Compared NUMERICALLY, which is the whole point. The browser hands us what
+    the DOM holds -- "1", "7", "0" -- while ui-config holds what python built
+    the control with -- 1.0, 7.0, 0.0. String equality said those differed, so
+    every untouched slider in the lazily-built img2img tab survived pruning:
+    160 of the 216 entries a "pruned" session still carried were ControlNet,
+    FreeU, PAG and LatentModifier sliders sitting at exactly their default.
+
+    A slider also QUANTIZES to its step, so what the DOM reports is not always
+    what python passed -- Auto SAM's crop_overlap_ratio is built as
+    0.3413333333333333 and reads back 0.34. Half a step of tolerance closes
+    that gap without letting a real neighbouring position through.
+
+    Requires agreement from EVERY recorded default under this (tab, label). Two
+    scripts in one tab can share a short label with different defaults, and
+    when they disagree we cannot tell which control we are looking at -- so we
+    keep the entry rather than guess.
+    """
+    if not known:
+        return False
+    num = _as_number(val)
+    tol = 0.0
+    if step:
+        widest = max((_as_number(s) or 0.0) for s in step)
+        tol = abs(widest) / 2.0
+    for recorded in known:
+        if str(recorded) == str(val):
+            continue
+        if isinstance(recorded, bool) or str(recorded).lower() in ("true", "false"):
+            if str(recorded).lower() == str(val).strip().lower():
+                continue
+            return False
+        rnum = _as_number(recorded)
+        if num is None or rnum is None:
+            return False
+        if abs(rnum - num) > tol + 1e-9:
+            return False
+    return True
 
 
 def _is_untouched_value(val):
@@ -1053,7 +1107,7 @@ def _prune_default_values(snapshots):
     Everything else is kept, so the worst case is a file that is still too big
     -- never a setting that silently disappears.
     """
-    exact, labels = _ui_config_index()
+    exact, labels, steps = _ui_config_index()
     if not exact:
         return snapshots
 
@@ -1072,16 +1126,20 @@ def _prune_default_values(snapshots):
             tabs = [tab_token]
             if " > " in label:
                 tabs.append(label.split(" > ")[0].strip().lower())
-            known = _known_default(exact, labels, tabs, label)
-            if known is not None:
-                if len(known) == 1 and str(val) in known:
+            hit = _match_key(exact, labels, tabs, label)
+            if hit is not None:
+                if _is_default_value(val, exact.get(hit), steps.get(hit)):
                     continue         # recorded default, and we are sitting on it
                 kept[label] = val
                 continue
             if _is_untouched_value(val):
                 continue             # no record, but unmistakably unset
             kept[label] = val
-        if kept:
+        # A tab whose only survivors are bookkeeping ("__subtab") holds nothing
+        # the user changed. Keeping it made restore VISIT that tab -- which in
+        # gradio 6 means BUILDING it -- so a restore opened Extras, PNG Info and
+        # every extension tab that had merely been glanced at once.
+        if any(not k.startswith("__") for k in kept):
             out[tab] = kept
     return out
 

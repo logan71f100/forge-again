@@ -2154,9 +2154,47 @@
         } catch (e) { /* DOM mid-rebuild */ }
     }
 
+    // A fingerprint of everything Forge's mode machinery rewrites. set_mode
+    // touches the checkpoint, the VAE/text-encoder list, GPU weights and the
+    // resolution/CFG/steps/sampler/scheduler pair on both generate tabs.
+    function settleSignature() {
+        const app = gradioApp();
+        const ids = ['#forge_ui_preset', '#setting_sd_model_checkpoint',
+            '#setting_forge_additional_modules', '#setting_forge_inference_memory',
+            '#txt2img_width', '#txt2img_height', '#txt2img_cfg_scale',
+            '#txt2img_distilled_cfg_scale', '#txt2img_steps',
+            '#txt2img_sampling', '#txt2img_scheduler'];
+        const parts = [];
+        for (const id of ids) {
+            const el = app.querySelector(id);
+            if (!el) { parts.push(''); continue; }
+            parts.push([...el.querySelectorAll('input, textarea, select')]
+                .map(x => (x.type === 'checkbox' ? String(x.checked) : x.value)).join('|'));
+        }
+        return parts.join('~');
+    }
+
+    // Wait until those controls stop moving. Forge answers a mode change in an
+    // async response that lands long after the click returns; without this we
+    // would set the user's values into a UI that is about to overwrite them.
+    async function waitForUiSettle(minMs, maxMs) {
+        const t0 = Date.now();
+        let sig = settleSignature(), stable = 0;
+        while (Date.now() - t0 < (maxMs || 20000)) {
+            await sleep(300);
+            const now = settleSignature();
+            if (now === sig) stable++; else { stable = 0; sig = now; }
+            if (stable >= 3 && Date.now() - t0 >= (minMs || 1200)) return true;
+        }
+        return false;
+    }
+
     async function applyUiSnapshots(snaps, activeTab) {
-        let applied = 0, failed = 0;
+        let applied = 0, failed = 0, repaired = 0;
         const unmatched = [];
+        // label -> value for everything we actually wrote, per tab; the verify
+        // pass at the end re-reads these and puts back whatever drifted.
+        const appliedByTab = {};
         const expandedAccordions = new Set();   // one expand-click per accordion per restore
         const tabOrder = Object.keys(snaps || {}).sort((a, b) =>
             (a === '__quicksettings' ? -1 : b === '__quicksettings' ? 1 : 0));
@@ -2170,6 +2208,45 @@
             if (err) { failed += pending.size; continue; }
             if (subtab) await switchTab(null, subtab);   // best-effort — apply what's visible either way
             await sleep(300);
+            const wrote = appliedByTab[tab] = appliedByTab[tab] || new Map();
+
+            // The UI-mode radio (sd / xl / flux) is not an ordinary setting:
+            // changing it runs set_mode, which rewrites the checkpoint, the
+            // VAE/text-encoder list, GPU weights and the whole resolution/CFG/
+            // steps/sampler block from that mode's profile -- asynchronously.
+            // Restoring it in label order therefore UNDID the restore: the mode
+            // went in, we moved on and set the user's chroma checkpoint and
+            // their resolution, and then the preset's response landed on top of
+            // both. Apply the mode alone, first, and wait for the UI to stop
+            // moving before touching anything else.
+            if (isQS) {
+                const qs = scanControls(gradioApp().querySelector('#quicksettings'));
+                const mode = qs.find(c => c.el && c.el.closest('#forge_ui_preset'));
+                if (mode) {
+                    for (const [label, value] of [...pending]) {
+                        const c = qs.find(x => x.label === label) || findControl(qs, label);
+                        if (c !== mode) continue;
+                        pending.delete(label);
+                        let cur;
+                        try { cur = mode.get(); } catch (e) { cur = undefined; }
+                        // already in that mode: do NOT replay it. A redundant
+                        // switch costs a full model reload and clobbers exactly
+                        // the values we are here to restore.
+                        if (String(cur) === String(value)) break;
+                        setActivity('↺ switching UI mode to "' + value + '"…');
+                        try {
+                            await mode.set(value);
+                            applied++;
+                            wrote.set(label, value);
+                        } catch (e) {
+                            failed++;
+                            unmatched.push(tab + ': ' + label + ' (' + e.message + ')');
+                        }
+                        await waitForUiSettle(1500, 25000);
+                        break;
+                    }
+                }
+            }
 
             // Pass 1: checkboxes & radios only — enabling a feature (Soft
             // inpainting, a ControlNet unit) is what makes its sub-controls
@@ -2222,6 +2299,7 @@
                     try {
                         await c.set(value);
                         applied++;
+                        wrote.set(label, value);
                         pending.delete(label);
                     } catch (e) {
                         // hard failure (e.g. dropdown option gone) — don't retry
@@ -2304,11 +2382,40 @@
             failed += pending.size;
             for (const label of pending.keys()) unmatched.push(tab + ': ' + label + ' (not found)');
         }
+        // Verify & repair. Everything above is a write into a UI that answers
+        // asynchronously: a checkpoint switch, a LoRA refresh or a late preset
+        // response can overwrite a value we set several tabs ago, which is how
+        // a restore could finish "successfully" with the wrong model loaded and
+        // the wrong resolution on screen. Re-read what we wrote and put back
+        // what drifted. One round, and no accordion/inner-tab hunting -- those
+        // controls are already mounted from the first pass.
+        for (const tab of tabOrder) {
+            const wrote = appliedByTab[tab];
+            if (!wrote || !wrote.size) continue;
+            const isQS = (tab === '__quicksettings');
+            if (!isQS && await switchTab(tab)) continue;
+            await sleep(200);
+            const controls = scanControls(isQS ? gradioApp().querySelector('#quicksettings') : undefined);
+            let fixedHere = 0;
+            for (const [label, value] of wrote) {
+                const c = controls.find(x => x.label === label) || findControl(controls, label);
+                if (!c) continue;
+                let cur;
+                try { cur = c.get(); } catch (e) { continue; }
+                if (String(cur) === String(value)) continue;
+                setActivity('↺ re-applying "' + label + '" (overwritten while restoring)…');
+                try { await c.set(value); repaired++; fixedHere++; } catch (e) { /* leave it */ }
+            }
+            // a repaired checkpoint/VAE triggers its own reload — let it land
+            // before we go on to check the tabs whose values it can overwrite
+            if (fixedHere && isQS) await waitForUiSettle(800, 15000);
+        }
+
         if (activeTab) await switchTab(activeTab);
         setActivity('');
         if (unmatched.length) console.log('[forge-ai] restore unmatched:', unmatched);
         window.__faiLastUnmatched = unmatched;   // diagnosable from the console/devtools
-        return { applied, failed, unmatched };
+        return { applied, failed, repaired, unmatched };
     }
     // NOTE: only Forge UI state (settings & prompts per tab) is saved. The AI
     // bot itself (chat, run log, best/reference images) deliberately starts
@@ -2354,6 +2461,7 @@
                 sysMsg('↺ settings & prompts restored across ' + Object.keys(s.uiSnapshots).length
                     + ' tab(s) from ' + (s.ts ? new Date(s.ts).toLocaleString() : 'unknown time')
                     + ': ' + res.applied + ' value(s) applied'
+                    + (res.repaired ? ', ' + res.repaired + ' re-applied after the UI overwrote them' : '')
                     + (res.failed ? ' (' + res.failed + ' could not be matched — a model/extension may have changed)' : ''));
             } finally {
                 uiRestoring = false;
