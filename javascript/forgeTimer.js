@@ -133,7 +133,11 @@ window.forgeTimer = (function () {
                 try { nativeCAF(entry[0]); } catch (e) { /* already fired */ }
                 scheduleOnWorker(entry[1]);
             });
-            console.log('[forgeTimer] tab hidden: adopted ' + parked.length + ' parked frame callback(s)');
+            try {
+                if (window.opts && opts.forge_client_forensics) {
+                    console.log('[forgeTimer] tab hidden: adopted ' + parked.length + ' parked frame callback(s)');
+                }
+            } catch (e) { /* opts not loaded yet */ }
         });
     } catch (e) {
         console.warn('[forgeTimer] could not shim requestAnimationFrame:', e);

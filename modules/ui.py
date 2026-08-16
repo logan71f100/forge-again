@@ -1348,6 +1348,10 @@ def setup_ui_api(app):
         # threadpool and did os.path.getsize + append (+ a periodic 2MB
         # os.replace) INSIDE the request, competing with progress polling and
         # the API for the same worker pool. Forensics must never cost latency.
+        # Gate the WRITE as well as the send: a page left open from before the
+        # setting was turned off would otherwise keep appending to the file.
+        if not getattr(shared.opts, 'forge_client_forensics', False):
+            return {"ok": True, "skipped": "forensics disabled"}
         lines = payload.get("lines") or []
         if not isinstance(lines, list):
             return {"ok": False}

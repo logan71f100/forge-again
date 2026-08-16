@@ -240,16 +240,28 @@
     // UI is mid-generation.
     window.faStreamLog = window.faStreamLog || [];
     var shippedIdx = 0;
+
+    // Settings > System > "Log connection forensics". OFF for a normal install:
+    // without it this printed every queue-stream event to the console and shipped
+    // the buffer to the server, which grew client-debug.log on machines that were
+    // working perfectly. The in-memory ring is kept either way -- it is bounded at
+    // 200 lines and costs nothing, so window.faStreamLog is still there to inspect
+    // if a user is asked to look, without any console noise or disk writes.
+    function forensicsOn() {
+        try { return !!(window.opts && opts.forge_client_forensics); } catch (e) { return false; }
+    }
+
     function slog(msg) {
         var line = new Date().toISOString() + ' ' + msg;
         window.faStreamLog.push(line);
         if (window.faStreamLog.length > 200) { window.faStreamLog.shift(); shippedIdx = Math.max(0, shippedIdx - 1); }
-        console.log('[fa-stream] ' + line);
+        if (forensicsOn()) console.log('[fa-stream] ' + line);
     }
 
     // Ship new log lines to the server (client-debug.log) so connection
     // problems can be diagnosed server-side. Piggybacks on the ping cadence.
     function shipLog() {
+        if (!forensicsOn()) { shippedIdx = window.faStreamLog.length; return; }
         if (shippedIdx >= window.faStreamLog.length) return;
         var lines = window.faStreamLog.slice(shippedIdx);
         shippedIdx = window.faStreamLog.length;

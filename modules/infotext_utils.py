@@ -219,15 +219,21 @@ def connect_paste_params_buttons(only_tabname=None, bindings=None):
             continue
 
         _connected_bindings[id(binding)] = _fields_token
-        try:
-            _dbg_btn = getattr(binding.paste_button, '_id', '?')
-            _dbg_src_img = getattr(binding.source_image_component, '_id', None)
-            _dbg_src_txt = getattr(binding.source_text_component, '_id', None)
-            _dbg_init = getattr(paste_fields[binding.tabname]['init_img'], '_id', None)
-            _dbg_f0 = getattr(paste_fields[binding.tabname]['fields'][0][0], '_id', None) if paste_fields[binding.tabname]['fields'] else None
-            print(f"[paste-wire DEBUG] dest={binding.tabname} cur={_cur_session} btn={_dbg_btn} src_img={_dbg_src_img} src_txt={_dbg_src_txt} dst_init={_dbg_init} dst_f0={_dbg_f0}", flush=True)
-        except Exception as _e:
-            print(f"[paste-wire DEBUG] dest={binding.tabname} (id dump failed: {_e})", flush=True)
+        # Component-id dump behind the same forensics switch. This diagnosed the
+        # second-session paste bug (stale ScriptRunner registries handing a new
+        # page the previous session's dead component ids); that is fixed and
+        # covered by "ui: send-to works in a second session", so a normal launch
+        # should not print a block of ids it will never look at.
+        if getattr(shared.opts, 'forge_client_forensics', False):
+            try:
+                _dbg_btn = getattr(binding.paste_button, '_id', '?')
+                _dbg_src_img = getattr(binding.source_image_component, '_id', None)
+                _dbg_src_txt = getattr(binding.source_text_component, '_id', None)
+                _dbg_init = getattr(paste_fields[binding.tabname]['init_img'], '_id', None)
+                _dbg_f0 = getattr(paste_fields[binding.tabname]['fields'][0][0], '_id', None) if paste_fields[binding.tabname]['fields'] else None
+                print(f"[paste-wire DEBUG] dest={binding.tabname} cur={_cur_session} btn={_dbg_btn} src_img={_dbg_src_img} src_txt={_dbg_src_txt} dst_init={_dbg_init} dst_f0={_dbg_f0}", flush=True)
+            except Exception as _e:
+                print(f"[paste-wire DEBUG] dest={binding.tabname} (id dump failed: {_e})", flush=True)
 
         destination_image_component = paste_fields[binding.tabname]["init_img"]
         fields = paste_fields[binding.tabname]["fields"]
