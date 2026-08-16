@@ -1744,22 +1744,19 @@ def check_ui_regression() -> None:
                     if backup is not None:
                         with open(sess_file, "wb") as f:
                             f.write(backup)
-                    # Hand the page back the way we found it. This check leaves
-                    # "Resize by" selected, which UNMOUNTS the Resize-to pane --
-                    # and the detect-size button that a later check clicks lives
-                    # in it. Restore the default so nothing downstream inherits
-                    # this one's state.
+                    # Hand the page back the way we found it: a plain RELOAD,
+                    # because this check disturbs the UI two ways that break
+                    # later ones. It leaves "Resize by" selected, which unmounts
+                    # the Resize-to pane holding the detect-size button a later
+                    # check clicks; and Restore re-opens the assistant panel,
+                    # which floats over that same corner so the click never
+                    # lands. Reloading resets both at once, and re-opening
+                    # img2img leaves the tab the following checks expect.
                     try:
+                        page.reload(wait_until="domcontentloaded", timeout=120000)
+                        page.wait_for_timeout(3000)
                         page.click('button[role=tab]:text-is("Img2img")', timeout=15000)
-                        page.wait_for_timeout(1500)
-                        page.evaluate("""() => {
-                            const rz = document.querySelector('#img2img_tabs_resize');
-                            const bar = rz && rz.querySelector('.tab-nav, [role=tablist]');
-                            const to = bar && [...bar.children].find(
-                                b => b.textContent.trim() === 'Resize to');
-                            if (to) to.click();
-                        }""")
-                        page.wait_for_timeout(700)
+                        page.wait_for_timeout(2500)
                     except Exception:
                         pass
             except Exception as e:
