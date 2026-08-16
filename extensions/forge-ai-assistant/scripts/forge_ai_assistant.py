@@ -929,6 +929,82 @@ def _profiles_store(p):
     os.replace(tmp, PROFILES_FILE)
 
 
+UI_CONFIG_FILE = os.path.join(_PROJECT_ROOT, "ui-config.json")
+
+
+def _norm_label(label):
+    """Our capture labels carry decorations ui-config.json does not.
+
+    We prefix a control with its section ("Hires. fix > Denoising strength") and
+    suffix duplicates ("Save mask #2"); ui-config keys are plain
+    "<tab>/<label>/value". Strip both so the two can be compared.
+    """
+    import re
+    label = re.sub(r"\s*#\d+$", "", label)
+    if " > " in label:
+        label = label.rsplit(" > ", 1)[-1]
+    return label.strip()
+
+
+def _prune_default_values(snapshots):
+    """Drop entries that are sitting at their ui-config default.
+
+    A session should carry what the user CHANGED, not a copy of the whole page:
+    captured snapshots ran to 400+ entries, nearly all of them defaults, which
+    made restore a bulk rewrite and dragged lazily-built tabs open for values
+    that were never touched. ui-config.json is the authoritative answer to "what
+    does a fresh page show" -- it is what create_ui() applies at build time --
+    and reading it HERE, at save time, avoids the trap that defeated two
+    browser-side attempts: gradio builds tabs lazily, so any baseline taken in
+    the page races the mount and can record the user's own edit as the default.
+
+    Conservative by construction. An entry is dropped only when its default is
+    known AND equal; anything unmatched is kept, so the worst case is a file
+    that is still too big -- never a setting that silently disappears. The
+    normalized-label lookup additionally requires the short name to be
+    unambiguous within its tab, so a section-prefixed control can never be
+    compared against an unrelated one that happens to share its base name.
+    """
+    try:
+        with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return snapshots          # no defaults to compare against: change nothing
+    if not isinstance(cfg, dict) or not cfg:
+        return snapshots
+
+    out = {}
+    for tab, snap in (snapshots or {}).items():
+        if not isinstance(snap, dict) or tab.startswith("__"):
+            out[tab] = snap       # quicksettings et al: no ui-config counterpart
+            continue
+        # short names that appear more than once in this tab are ambiguous
+        seen = {}
+        for label in snap:
+            seen[_norm_label(label)] = seen.get(_norm_label(label), 0) + 1
+
+        kept = {}
+        for label, val in snap.items():
+            if label.startswith("__"):
+                kept[label] = val
+                continue
+            default = None
+            exact = "%s/%s/value" % (tab.lower(), label)
+            if exact in cfg:
+                default = cfg[exact]
+            else:
+                short = _norm_label(label)
+                loose = "%s/%s/value" % (tab.lower(), short)
+                if loose in cfg and seen.get(short, 0) == 1:
+                    default = cfg[loose]
+            if default is not None and str(default) == str(val):
+                continue          # at its default -- leave it out
+            kept[label] = val
+        if kept:
+            out[tab] = kept
+    return out
+
+
 def _session_save(state):
     # Keep one generation of backup: a save from a fresh/near-default page must
     # never be able to DESTROY the previous real session. Only rotate when the
@@ -960,6 +1036,12 @@ def _session_save(state):
             state["uiSnapshots"] = merged
     except Exception:
         pass
+    try:
+        if state.get("uiSnapshots"):
+            state = dict(state)
+            state["uiSnapshots"] = _prune_default_values(state["uiSnapshots"])
+    except Exception:
+        pass                       # pruning is an optimisation, never a gate
     tmp = SESSION_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f)
