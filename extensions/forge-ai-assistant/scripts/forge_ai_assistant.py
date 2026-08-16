@@ -17,6 +17,7 @@ The chat UI itself is injected by javascript/forge_ai_assistant.js.
 """
 
 import os
+import re
 import glob
 import json
 import time
@@ -936,69 +937,149 @@ def _norm_label(label):
     """Our capture labels carry decorations ui-config.json does not.
 
     We prefix a control with its section ("Hires. fix > Denoising strength") and
-    suffix duplicates ("Save mask #2"); ui-config keys are plain
-    "<tab>/<label>/value". Strip both so the two can be compared.
+    suffix duplicates ("Save mask #2"); ui-config keys end in "<tab>/<label>".
+    Strip both so the two can be compared.
     """
-    import re
     label = re.sub(r"\s*#\d+$", "", label)
     if " > " in label:
         label = label.rsplit(" > ", 1)[-1]
     return label.strip()
 
 
-def _prune_default_values(snapshots):
-    """Drop entries that are sitting at their ui-config default.
+# Display tab name -> the token ui-config actually uses for it.
+_UI_CONFIG_TAB_ALIAS = {
+    "checkpoint merger": "modelmerger",
+    "png info": "pnginfo",
+    "spaces": "space",
+    "model downloader": "model_downloader",
+}
 
-    A session should carry what the user CHANGED, not a copy of the whole page:
-    captured snapshots ran to 400+ entries, nearly all of them defaults, which
-    made restore a bulk rewrite and dragged lazily-built tabs open for values
-    that were never touched. ui-config.json is the authoritative answer to "what
-    does a fresh page show" -- it is what create_ui() applies at build time --
-    and reading it HERE, at save time, avoids the trap that defeated two
-    browser-side attempts: gradio builds tabs lazily, so any baseline taken in
-    the page races the mount and can record the user's own edit as the default.
+_ui_config_cache = {"mtime": None, "exact": None, "labels": None}
 
-    Conservative by construction. An entry is dropped only when its default is
-    known AND equal; anything unmatched is kept, so the worst case is a file
-    that is still too big -- never a setting that silently disappears. The
-    normalized-label lookup additionally requires the short name to be
-    unambiguous within its tab, so a section-prefixed control can never be
-    compared against an unrelated one that happens to share its base name.
+
+def _ui_config_index():
+    """(tab, label) -> {default values} for EVERY ui-config key shape.
+
+    The first cut of this only looked at "<tab>/<label>/value" and pruned 29 of
+    403 entries. That is 741 of the file's 1974 keys: script and extension
+    controls are stored as "customscript/<script>.py/<tab>/<label>/value" (1233
+    keys), and some tabs key off their id rather than their display name
+    ("modelmerger", "pnginfo") or a capitalised name ("Replacer"). Indexing on
+    the LAST TWO path segments catches all of them at once.
     """
+    try:
+        mtime = os.path.getmtime(UI_CONFIG_FILE)
+    except OSError:
+        return {}, {}
+    if _ui_config_cache["mtime"] == mtime:
+        return _ui_config_cache["exact"], _ui_config_cache["labels"]
+    exact, labels = {}, {}
     try:
         with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception:
-        return snapshots          # no defaults to compare against: change nothing
-    if not isinstance(cfg, dict) or not cfg:
+        return {}, {}
+    for key, val in (cfg or {}).items():
+        if not key.endswith("/value"):
+            continue
+        parts = key[: -len("/value")].split("/")
+        if len(parts) < 2:
+            continue
+        tab, label = parts[-2].strip().lower(), parts[-1].strip()
+        exact.setdefault((tab, label), set()).add(str(val))
+        labels.setdefault(tab, set()).add(label)
+    _ui_config_cache.update({"mtime": mtime, "exact": exact, "labels": labels})
+    return exact, labels
+
+
+def _known_default(exact, labels, tabs, label):
+    """The recorded default(s) for a control, or None if we cannot tell."""
+    base = _norm_label(label)
+    for tab in tabs:
+        for cand in (label, base):
+            if (tab, cand) in exact:
+                return exact[(tab, cand)]
+    # Some captured labels append the control's description ("Schedule bias
+    # Shifts when preservation of original content occurs..."); match the
+    # longest recorded label our label starts with.
+    for tab in tabs:
+        best = None
+        for recorded in labels.get(tab, ()):
+            if len(recorded) >= 5 and base.startswith(recorded):
+                if best is None or len(recorded) > len(best):
+                    best = recorded
+        if best is not None:
+            return exact.get((tab, best))
+    return None
+
+
+def _is_untouched_value(val):
+    """True when a value is self-evidently the un-set state of its control.
+
+    Blank text, an unchecked box, and a numeric zero. The first two cannot be
+    anything but unset. Zero is a judgement call, taken deliberately: this path
+    runs ONLY for controls ui-config has no record of, and in practice those are
+    the integrated extras -- ControlNet's Start Timestep, LatentModifier's
+    Rescale Cfg Phi, DynamicThresholding's Cfg Scale Min, Auto SAM's
+    min_mask_region_area -- where zero IS the off position. Anything ui-config
+    does record is compared against its real default above and never reaches
+    here, so the only exposure is a control with an unrecorded non-zero default
+    that the user deliberately set to 0; it would come back as its own default.
+    """
+    if val is None:
+        return True
+    s = str(val).strip()
+    if s == "" or s.lower() == "false":
+        return True
+    try:
+        return float(s) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _prune_default_values(snapshots):
+    """Drop entries the user has not changed.
+
+    A session used to carry a copy of the whole page -- 400+ entries, nearly all
+    defaults -- which made restore a bulk rewrite and dragged lazily-built tabs
+    open for values nobody had touched. ui-config.json is the authoritative
+    answer to "what does a fresh page show" (it is what create_ui applies at
+    build time), and consulting it HERE, at save time, avoids what defeated two
+    browser-side attempts: gradio builds tabs lazily, so a baseline taken in the
+    page races the mount and can record the user's own edit as the default.
+
+    Conservative by construction: an entry goes only when its default is known
+    and equal, or when it is self-evidently unset (blank text / unchecked box).
+    Everything else is kept, so the worst case is a file that is still too big
+    -- never a setting that silently disappears.
+    """
+    exact, labels = _ui_config_index()
+    if not exact:
         return snapshots
 
     out = {}
     for tab, snap in (snapshots or {}).items():
         if not isinstance(snap, dict) or tab.startswith("__"):
-            out[tab] = snap       # quicksettings et al: no ui-config counterpart
+            out[tab] = snap          # quicksettings: no ui-config counterpart
             continue
-        # short names that appear more than once in this tab are ambiguous
-        seen = {}
-        for label in snap:
-            seen[_norm_label(label)] = seen.get(_norm_label(label), 0) + 1
-
+        tab_token = _UI_CONFIG_TAB_ALIAS.get(tab.lower(), tab.lower())
         kept = {}
         for label, val in snap.items():
             if label.startswith("__"):
                 kept[label] = val
                 continue
-            default = None
-            exact = "%s/%s/value" % (tab.lower(), label)
-            if exact in cfg:
-                default = cfg[exact]
-            else:
-                short = _norm_label(label)
-                loose = "%s/%s/value" % (tab.lower(), short)
-                if loose in cfg and seen.get(short, 0) == 1:
-                    default = cfg[loose]
-            if default is not None and str(default) == str(val):
-                continue          # at its default -- leave it out
+            # a section prefix ("Replacer > ...") is often a tab of its own
+            tabs = [tab_token]
+            if " > " in label:
+                tabs.append(label.split(" > ")[0].strip().lower())
+            known = _known_default(exact, labels, tabs, label)
+            if known is not None:
+                if len(known) == 1 and str(val) in known:
+                    continue         # recorded default, and we are sitting on it
+                kept[label] = val
+                continue
+            if _is_untouched_value(val):
+                continue             # no record, but unmistakably unset
             kept[label] = val
         if kept:
             out[tab] = kept
