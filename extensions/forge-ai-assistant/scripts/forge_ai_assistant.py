@@ -1055,6 +1055,10 @@ def _is_default_value(val, known, step):
     for recorded in known:
         if str(recorded) == str(val):
             continue
+        # "nothing selected" is written two ways: a multiselect records [] and
+        # reads back as an empty string (Styles).
+        if str(recorded).strip() in ("", "[]") and str(val).strip() in ("", "[]"):
+            continue
         if isinstance(recorded, bool) or str(recorded).lower() in ("true", "false"):
             if str(recorded).lower() == str(val).strip().lower():
                 continue
@@ -1065,6 +1069,45 @@ def _is_default_value(val, known, step):
         if abs(rnum - num) > tol + 1e-9:
             return False
     return True
+
+
+def _shape(val):
+    s = str(val).strip().lower()
+    if s in ("true", "false"):
+        return "bool"
+    return "num" if _as_number(s) is not None else "text"
+
+
+def _shapes_agree(val, known):
+    """Does the record we matched even describe a control of this type?
+
+    Labels are matched by text, so collisions happen: the "Hires. fix"
+    InputAccordion toggle (false) lands on a "Hires. fix" DROPDOWN recorded as
+    "Follow txt2img", and the PNG-info checkboxes land on the prompt/seed fields
+    they are named after. A bool against a string is not a value that differs
+    from its default -- it is the wrong record, and pretending otherwise kept
+    those entries in the session forever. Treat it as no record at all and let
+    the self-evidently-unset checks below decide.
+    """
+    return any(_shape(r) == _shape(val) for r in (known or ()))
+
+
+def _is_first_choice(label, val):
+    """An unlabeled radio still sitting on its first option.
+
+    Gradio 6 gives a radio GROUP no title element of its own, so the capture
+    falls back to the text of the first option: ControlNet's control mode is
+    captured as "Balanced" = "Balanced", img2img's resize mode as "Just resize"
+    = "Just resize", the top bar's "Queue" = "Queue". Label equal to value means
+    the control is on the option its label was taken from -- the first, and the
+    build default for every one of these that Forge creates. Some 45 entries per
+    session, none of which restore anything.
+
+    When the value has moved off that first option ("fill" = "original") we keep
+    it: without a ui-config record there is no way to tell a user's choice from
+    a build default, and the cost of being wrong is a lost setting.
+    """
+    return bool(label) and _norm_label(label) == str(val).strip()
 
 
 def _is_untouched_value(val):
@@ -1114,7 +1157,10 @@ def _prune_default_values(snapshots):
     out = {}
     for tab, snap in (snapshots or {}).items():
         if not isinstance(snap, dict) or tab.startswith("__"):
-            out[tab] = snap          # quicksettings: no ui-config counterpart
+            # quicksettings has no ui-config counterpart -- keep it whole, minus
+            # the first-choice radios described below ("Queue" = "Queue").
+            out[tab] = ({k: v for k, v in snap.items() if not _is_first_choice(k, v)}
+                        if isinstance(snap, dict) else snap)
             continue
         tab_token = _UI_CONFIG_TAB_ALIAS.get(tab.lower(), tab.lower())
         kept = {}
@@ -1127,11 +1173,17 @@ def _prune_default_values(snapshots):
             if " > " in label:
                 tabs.append(label.split(" > ")[0].strip().lower())
             hit = _match_key(exact, labels, tabs, label)
-            if hit is not None:
-                if _is_default_value(val, exact.get(hit), steps.get(hit)):
+            known = exact.get(hit) if hit is not None else None
+            if known:
+                if _is_default_value(val, known, steps.get(hit)):
                     continue         # recorded default, and we are sitting on it
-                kept[label] = val
-                continue
+                if _shapes_agree(val, known):
+                    kept[label] = val
+                    continue         # genuinely different from its default
+                # otherwise the label matched a different control entirely —
+                # fall through and judge the value on its own
+            if _is_first_choice(label, val):
+                continue             # unlabeled radio, still on its first option
             if _is_untouched_value(val):
                 continue             # no record, but unmistakably unset
             kept[label] = val
@@ -1173,12 +1225,33 @@ def _session_save(state):
                 merged[tab] = {**(old_tabs.get(tab) or {}), **(snap or {})}
             state = dict(state)
             state["uiSnapshots"] = merged
+            # The edited-tab list accumulates the same way, and for the same
+            # reason: one save carries only what this page knows about.
+            state["uiEditedTabs"] = sorted(set(old.get("uiEditedTabs") or [])
+                                           | set(state.get("uiEditedTabs") or []))
     except Exception:
         pass
     try:
         if state.get("uiSnapshots"):
             state = dict(state)
-            state["uiSnapshots"] = _prune_default_values(state["uiSnapshots"])
+            snaps = _prune_default_values(state["uiSnapshots"])
+            # Second gate, independent of the value comparison: a tab nobody
+            # ever typed in does not belong in the session. Value pruning alone
+            # cannot clear a tab like Checkpoint Merger, whose model dropdowns
+            # legitimately read back the loaded checkpoint and whose defaults
+            # ui-config never recorded -- so merely OPENING that tab once left
+            # it in the session, and every restore afterwards re-opened (and in
+            # gradio 6, rebuilt) it. An edit is a trusted input event inside the
+            # tab, or the assistant applying a value there; the list persists in
+            # the file, so it survives restarts and multi-client saves. The
+            # active tab is always kept: it is where the user is.
+            edited = set(state.get("uiEditedTabs") or [])
+            if edited:
+                keep_too = {state.get("uiActiveTab")}
+                snaps = {t: v for t, v in snaps.items()
+                         if t.startswith("__") or t in edited or t in keep_too}
+                state["uiEditedTabs"] = sorted(e for e in edited if e in snaps)
+            state["uiSnapshots"] = snaps
     except Exception:
         pass                       # pruning is an optimisation, never a gate
     tmp = SESSION_FILE + ".tmp"

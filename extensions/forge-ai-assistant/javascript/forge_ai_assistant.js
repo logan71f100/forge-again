@@ -1780,6 +1780,9 @@
                 try {
                     await c.set(t.value);
                     didSet = true;
+                    // the assistant changing a setting counts as configuring
+                    // that tab, exactly as a click would
+                    { const _t = currentTabName(); if (_t) uiEditedTabs.add(_t); }
                     sysMsg(`⚙ ${c.label} → ${t.value}`);
                 } catch (e) {
                     feedback.push(`[tool error] failed to set "${c.label}": ${e.message}`);
@@ -2058,6 +2061,14 @@
     let uiSnapshots = {};        // { topTabName: { label: value } }
     let uiActiveTab = null;      // tab that was active at save time
     let uiRestoring = false;     // don't capture while we're mid-restore
+    // Tabs something was actually CHANGED in, as opposed to merely opened.
+    // Snapshots cover every visited tab, and a tab like Checkpoint Merger reads
+    // back values no default list records (its model dropdowns show whatever is
+    // loaded), so opening it once was enough to keep it in the session forever —
+    // and every restore then re-opened it, which in gradio 6 means rebuilding
+    // it. Seeded from the saved session so a restart does not forget, and from
+    // a restore so restored-but-untouched tabs are not dropped on the next save.
+    const uiEditedTabs = new Set();
     let lastUiSnapJson = '';
     let lastScanKinds = {};      // {slider: N, dropdown: N, ...} from the last capture — save diagnostics
     const UI_SKIP_TABS = /^(settings|extensions)$/i;   // never bulk-write Forge settings
@@ -2436,6 +2447,7 @@
                     v: 2, ts: Date.now(),
                     uiSnapshots: uiSnapshots,
                     uiActiveTab: uiActiveTab,
+                    uiEditedTabs: [...uiEditedTabs],
                 }, 60000);
             } catch (e) { /* autosave is best-effort */ }
         };
@@ -2457,6 +2469,10 @@
                 const res = await applyUiSnapshots(s.uiSnapshots, s.uiActiveTab);
                 uiSnapshots = s.uiSnapshots;
                 uiActiveTab = s.uiActiveTab || uiActiveTab;
+                // Restoring counts as configuring: these tabs hold values the
+                // user chose, and the next save must not treat them as merely
+                // opened and drop them.
+                for (const t of Object.keys(s.uiSnapshots)) if (!t.startsWith('__')) uiEditedTabs.add(t);
                 panel.style.display = 'flex';
                 sysMsg('↺ settings & prompts restored across ' + Object.keys(s.uiSnapshots).length
                     + ' tab(s) from ' + (s.ts ? new Date(s.ts).toLocaleString() : 'unknown time')
@@ -3221,6 +3237,10 @@
                 for (const [tab, snap] of Object.entries(stored)) {
                     uiSnapshots[tab] = Object.assign({}, snap, uiSnapshots[tab] || {});
                 }
+                // A tab that earned its place in the stored session keeps it:
+                // without this, the first save of a new boot would drop every
+                // tab the user had not yet re-edited.
+                for (const t of (r.state.uiEditedTabs || Object.keys(stored))) uiEditedTabs.add(t);
             } catch (e) { /* no stored session yet */ }
 
             // The connection watchdog reloads the page by itself when the server
@@ -3273,7 +3293,19 @@
         // the restart-watchdog's prompt restore, the AI driver) never arm saves.
         let uiDirty = false;
         let userTouched = false;
-        const markUiDirty = (ev) => { if (ev && ev.isTrusted) { uiDirty = true; userTouched = true; } };
+        const markUiDirty = (ev) => {
+            if (!ev || !ev.isTrusted) return;
+            uiDirty = true;
+            userTouched = true;
+            // ...and remember WHERE, so a tab that was only looked at never
+            // makes it into the session. Quicksettings sits outside the tab
+            // bodies; an edit there says nothing about the tab on screen.
+            if (uiRestoring) return;
+            const t = ev.target;
+            if (t && t.closest && t.closest('#quicksettings')) return;
+            const tab = currentTabName();
+            if (tab) uiEditedTabs.add(tab);
+        };
         gradioApp().addEventListener('input', markUiDirty, true);
         gradioApp().addEventListener('change', markUiDirty, true);
 
@@ -3326,7 +3358,8 @@
                 captureUiSnapshot(true);
                 if (!Object.keys(uiSnapshots).length) return;   // never clobber a good save with nothing
                 const blob = new Blob(
-                    [JSON.stringify({ v: 2, ts: Date.now(), uiSnapshots: uiSnapshots, uiActiveTab: uiActiveTab })],
+                    [JSON.stringify({ v: 2, ts: Date.now(), uiSnapshots: uiSnapshots,
+                        uiActiveTab: uiActiveTab, uiEditedTabs: [...uiEditedTabs] })],
                     { type: 'application/json' });
                 navigator.sendBeacon('/forge-ai/session/save', blob);
             } catch (e) { /* best-effort */ }
