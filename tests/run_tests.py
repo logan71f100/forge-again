@@ -393,6 +393,105 @@ def check_generation_hints() -> None:
                "add + flash rule (fire/quiet/no-tag) + broken-rule isolation + register_tip x2")
 
 
+def _load_session_pruning(ui_config_path):
+    """Load the assistant's session-pruning helpers standalone.
+
+    The extension imports Forge's modules at file scope, which do not exist
+    outside a running server, so the pure functions are exec'd straight out of
+    the source instead of importing the module.
+    """
+    path = os.path.join(ROOT, "extensions", "forge-ai-assistant", "scripts",
+                        "forge_ai_assistant.py")
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    block = src[src.index("def _norm_label(label):"):src.index("def _session_save(state):")]
+    ns = {"json": json, "os": os, "re": re, "UI_CONFIG_FILE": ui_config_path}
+    exec(block, ns)
+    return ns
+
+
+# A saved session must carry what the user CHANGED, nothing else: restoring a
+# default is at best wasted work and at worst destructive, because visiting a
+# tab in gradio 6 BUILDS it. Every case here is a way that went wrong in
+# practice -- see the "Restore/Session" commits.
+SESSION_UI_CONFIG = {
+    "txt2img/Sampling steps/value": 20,
+    "txt2img/Width/value": 1024,
+    "txt2img/Width/step": 8,
+    "customscript/controlnet.py/txt2img/Control Weight/value": 1.0,
+    "customscript/controlnet.py/txt2img/Control Weight/step": 0.05,
+    "txt2img/crop_overlap_ratio/value": 0.3413333333333333,
+    "txt2img/crop_overlap_ratio/step": 0.01,
+    "txt2img/Styles/value": [],
+    "txt2img/Hires. fix/value": "Follow txt2img",
+    "txt2img/Prompt/value": "",
+}
+
+SESSION_SNAPSHOT = {
+    "Txt2img": {
+        "Sampling steps": "20",                          # the DOM says "20", ui-config says 20
+        "Width": "1024",                                 # ditto, with a step recorded
+        "ControlNet Unit 0 > Control Weight": "1",       # "1" vs 1.0 -- string compare kept 160 of these
+        "Auto SAM Config > crop_overlap_ratio": "0.34",  # slider quantizes to its step
+        "Styles": "",                                    # empty multiselect, recorded as []
+        "Hires. fix": "false",                           # accordion toggle matching a same-named dropdown
+        "Balanced": "Balanced",                          # unlabeled radio on its first option
+        "Prompt": "a cat",                               # CHANGED
+        "Height": "1000",                                # no record, not a default we can name
+        "fill": "original",                              # radio moved OFF its first option
+        "__subtab": "Generation",
+    },
+    "Extras": {                                          # opened, never configured
+        "Balanced": "Balanced",
+        "__subtab": "Single Image",
+    },
+}
+
+SESSION_EXPECTED = {"Txt2img": {"Prompt", "Height", "fill", "__subtab"}}
+
+
+def check_session_pruning() -> None:
+    """A saved session keeps changed values only -- and never drops a real one."""
+    tmp = tempfile.mkdtemp(prefix="forge-session-test-")
+    try:
+        cfg_path = os.path.join(tmp, "ui-config.json")
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(SESSION_UI_CONFIG, f)
+        try:
+            ns = _load_session_pruning(cfg_path)
+        except Exception as e:
+            record("session: pruning keeps only what changed", FAIL,
+                   f"could not load pruning helpers: {type(e).__name__}: {e}")
+            return
+
+        got = ns["_prune_default_values"](SESSION_SNAPSHOT)
+        problems = []
+        if set(got) != set(SESSION_EXPECTED):
+            problems.append(f"tabs: expected {sorted(SESSION_EXPECTED)}, got {sorted(got)}")
+        for tab, want in SESSION_EXPECTED.items():
+            have = set(got.get(tab, {}))
+            for lost in sorted(want - have):
+                problems.append(f"{tab}: DROPPED a changed value {lost!r}")
+            for extra in sorted(have - want):
+                problems.append(f"{tab}: kept a default {extra!r} = {got[tab][extra]!r}")
+        # values must never be rewritten, only removed
+        for tab, kept in got.items():
+            for label, val in kept.items():
+                if SESSION_SNAPSHOT[tab][label] != val:
+                    problems.append(f"{tab}/{label}: value ALTERED to {val!r}")
+
+        if problems:
+            record("session: pruning keeps only what changed", FAIL,
+                   "\n         ".join(problems[:8]))
+        else:
+            total = sum(len(v) for v in SESSION_SNAPSHOT.values())
+            record("session: pruning keeps only what changed", PASS,
+                   f"{total} -> {sum(len(v) for v in got.values())} entries, "
+                   f"unconfigured tab dropped")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_downloader_file_safety() -> None:
     """Move/delete must not escape their folder or clobber existing files."""
     try:
@@ -2147,6 +2246,7 @@ CHECKS = {
         ("classify", check_downloader_classification),
         ("error-tips", check_error_tips),
         ("hints", check_generation_hints),
+        ("session", check_session_pruning),
         ("filesafety", check_downloader_file_safety),
         ("dl-e2e", check_download_end_to_end),
         ("json", check_json_and_bom),

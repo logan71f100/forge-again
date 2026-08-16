@@ -42,6 +42,7 @@ everything at the end.
 | `classify` | The model downloader sorting a file into the wrong folder. Cases include the real regressions: `Kataragi_inpaintXL` (a ControlNet the "xl" rule used to claim as a checkpoint), `ae.safetensors` (the Flux VAE, which contains no "vae"), and the `JuggernautXL`-style names that broke when the XL match was made too strict. |
 | `error-tips` | A recognizable runtime error losing its plain-language tip, and the tip losing the field it highlights. |
 | `hints` | The `generation_hints` rule registry and `error_tips.register_tip` staying usable — these exist so failure messages can be extended without touching the generation path. |
+| `session` | The saved session growing back into a copy of the whole page. Asserts the pruning drops values that only look different from their `ui-config.json` default (`"1"` vs `1.0`, a slider quantized to its step, an empty multiselect vs `[]`), drops a tab nothing was configured in — restoring one *builds* it in gradio 6 — and never alters or loses a value the user actually changed. |
 | `filesafety` | The downloader's move/delete escaping their folder or clobbering files. Asserts path traversal is rejected, a move never overwrites an existing destination, and delete removes exactly the target. |
 | `dl-e2e` | The download path end to end: actually fetches a file and confirms it lands in the right folder. |
 
