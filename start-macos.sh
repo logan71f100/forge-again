@@ -72,15 +72,27 @@ if [ ! -x venv/bin/python ]; then
     python/bin/python3 -m venv venv || fail
 fi
 
+# requirements_versions.txt pins the CUDA build (torch==2.13.0+cu126), which
+# simply does not exist for Apple silicon -- pip answers "No matching
+# distribution found" and the launch dies. Filtering it here was not enough:
+# launch.py runs prepare_environment() itself and installed from the UNFILTERED
+# file, so a Mac never got past "Installing requirements" (issue #15). The
+# filtered copy is therefore kept, not deleted, and handed to launch.py through
+# REQS_FILE -- the hook Forge already has for exactly this. Regenerated on every
+# start so it tracks edits to requirements_versions.txt, and pointing
+# requirements_met() at it too means the torch pin no longer looks unsatisfied
+# on every launch, which would have reinstalled everything each time.
+REQS_MACOS="_requirements_macos.txt"
+grep -vE '^(--extra-index-url|torch==|torchvision==)' requirements_versions.txt > "$REQS_MACOS"
+export REQS_FILE="$REQS_MACOS"
+
 if [ ! -f venv/.deps_installed ]; then
     echo "[bootstrap] Upgrading pip ..."
     venv/bin/python -m pip install --upgrade pip || fail
     echo "[bootstrap] Installing PyTorch (MPS/CPU build from PyPI) ..."
     venv/bin/python -m pip install torch==2.13.0 torchvision==0.28.0 || fail
     echo "[bootstrap] Installing requirements (CUDA pins filtered for macOS) ..."
-    grep -vE '^(--extra-index-url|torch==|torchvision==)' requirements_versions.txt > _requirements_macos.txt
-    venv/bin/python -m pip install --no-build-isolation -r _requirements_macos.txt || fail
-    rm -f _requirements_macos.txt
+    venv/bin/python -m pip install --no-build-isolation -r "$REQS_MACOS" || fail
     echo ok > venv/.deps_installed
     echo "[bootstrap] Environment ready."
 fi
