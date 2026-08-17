@@ -2535,6 +2535,32 @@
             b.title = 'Put back the settings & prompts from your last session, in every tab you used. The AI chat itself always starts fresh.';
             b.onclick = () => restoreSession();
 
+            // Throwing the saved session away has to happen on BOTH sides at
+            // once. Clearing the file alone never held: this page seeds its
+            // snapshot at boot and never re-syncs, saves MERGE per tab, and the
+            // unload beacon writes the stale copy back on the way out — so a
+            // tab that was cleared server-side simply reappeared on the next
+            // autosave. Empty our own copy FIRST, then the file.
+            const clr = document.createElement('button');
+            clr.id = 'fai-clear-session';
+            clr.textContent = '🗑';
+            clr.title = 'Forget the saved session entirely — settings on screen are untouched, but nothing will be restored until you configure things again';
+            clr.onclick = async () => {
+                if (!confirm('Forget the saved session?\n\nNothing on screen changes. The next Restore will have nothing to put back until you change settings again.')) return;
+                uiSnapshots = {};
+                uiEditedTabs.clear();
+                uiActiveTab = null;
+                lastUiSnapJson = '';
+                const _ft = (typeof forgeTimer !== 'undefined') ? forgeTimer : null;
+                if (_ft) _ft.clearTimeout(sessionSaveTimer); else clearTimeout(sessionSaveTimer);
+                try {
+                    await apiJSON('/forge-ai/session/clear', {}, 30000);
+                    sysMsg('🗑 saved session cleared — this page will start recording again from your next change.');
+                } catch (e) {
+                    sysMsg('Could not clear the saved session: ' + e.message);
+                }
+            };
+
             const row = document.createElement('div');
             row.className = 'fai-profile-row';
             const sel = document.createElement('select');
@@ -2544,7 +2570,7 @@
             saveBtn.id = 'fai-profile-save';
             saveBtn.textContent = '💾';
             saveBtn.title = 'Save the current settings & prompts (all tabs visited this session) as a named profile';
-            row.append(sel, saveBtn);
+            row.append(sel, saveBtn, clr);
             wrap.append(b, row);
             anchor.insertAdjacentElement('afterend', wrap);
 

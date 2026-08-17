@@ -1636,6 +1636,27 @@ def on_app_started(demo, app):
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    @app.post("/forge-ai/session/clear")
+    def session_clear():
+        """Throw the saved session away.
+
+        Editing the file by hand does not work while a page is open, and that
+        is not a quirk -- it is the design. The client seeds uiSnapshots once at
+        boot and never re-syncs, and _session_save MERGES per tab, so a stale
+        page puts back anything removed on the next autosave. Reloading does not
+        help either: the beforeunload beacon writes the stale copy out as the
+        page goes away, before the fresh one can seed. The only reset that holds
+        is one that clears BOTH sides, which is what the button calling this
+        does -- the client empties its own copy before asking.
+        """
+        try:
+            for p in (SESSION_FILE, SESSION_FILE + ".prev"):
+                if os.path.exists(p):
+                    os.remove(p)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     @app.get("/forge-ai/profiles")
     def profiles_list():
         try:
