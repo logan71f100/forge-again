@@ -1308,8 +1308,15 @@ def _session_save(state):
             # tab, or the assistant applying a value there; the list persists in
             # the file, so it survives restarts and multi-client saves. The
             # active tab is always kept: it is where the user is.
-            edited = set(state.get("uiEditedTabs") or [])
-            if edited:
+            # ABSENT means "this client is too old to know" -> do not filter.
+            # EMPTY means "nothing has been edited yet" -> filter everything but
+            # the active tab. Conflating the two made the reset button useless: it
+            # left the list empty, which switched the gate off, so the very next
+            # capture wrote back the mounted-but-untouched img2img tab it had
+            # just removed.
+            edited_raw = state.get("uiEditedTabs")
+            if edited_raw is not None:
+                edited = set(edited_raw)
                 keep_too = {state.get("uiActiveTab")}
                 snaps = {t: v for t, v in snaps.items()
                          if t.startswith("__") or t in edited or t in keep_too}
