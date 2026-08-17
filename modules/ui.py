@@ -1014,6 +1014,16 @@ def create_ui():
                         _new = [c for cid, c in _cfg.blocks.items() if cid not in _before]
                         n = loadsave.apply_saved_to_components(_new, "img2img")
                         print(f"[ui-config] applied saved defaults to {n} lazily-built img2img control(s)")
+                        # CHROMA: it runs REAL CFG (its guidance embedding was
+                        # removed), so flux mode's distilled default of 1.0
+                        # leaves it with no guidance and washes the output out.
+                        # The checkpoint dropdown bumps txt2img for exactly
+                        # this, but could never reach img2img: these components
+                        # did not exist when that was wired, so they were
+                        # filtered out of its targets and img2img generated
+                        # Chroma at CFG 1 while txt2img ran at 4.
+                        from modules_forge import main_entry as _main_entry
+                        _main_entry.apply_chroma_defaults(_new)
                 except Exception as _e:
                     print(f"[ui-config] could not apply lazy img2img defaults: {_e}")
 

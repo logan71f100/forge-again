@@ -308,6 +308,57 @@ def modules_change(module_values:list, save=True, refresh=True) -> bool:
     return True
 
 
+# Chroma runs REAL CFG -- its guidance embedding was removed, so flux mode's
+# distilled default of 1.0 gives it no guidance at all and the output washes
+# out. These are the values the checkpoint dropdown bumps to; they live at
+# module scope so the lazily-built img2img tab can reach them too.
+CHROMA_CFG_VALUE = 4.0
+CHROMA_SCHEDULER_VALUE = 'Beta'
+CHROMA_STEPS_VALUE = 26
+
+
+def apply_chroma_defaults(components):
+    """Give a freshly built tab the same Chroma treatment txt2img gets.
+
+    The dropdown's .change (and the page-load pass beside it) can only touch
+    components that existed when they were wired. img2img is built lazily
+    inside a gr.render on first open, so its CFG, scheduler and steps were
+    always None at that moment, filtered out of chroma_targets, and never
+    bumped: txt2img ran Chroma at CFG 4 while img2img sat at the distilled
+    default of 1.0 and produced washed-out images.
+
+    Wiring the dropdown to these components afterwards is not an option -- an
+    app-level trigger bound to render-created outputs fires in every later
+    session and crashes it (see modules/ui.py). Since the render runs on first
+    open, applying the values here is equivalent for the case that matters: the
+    tab appears already correct for whatever checkpoint is loaded.
+    """
+    name = str((shared.opts.data or {}).get('sd_model_checkpoint', '') or '')
+    if shared.opts.forge_preset != 'flux' or 'chroma' not in name.lower():
+        return 0
+    changed = []
+    for c in components:
+        label = getattr(c, 'label', None)
+        if not label:
+            continue
+        try:
+            if label == 'CFG Scale' and (c.value or 0) < 2:
+                c.value = CHROMA_CFG_VALUE
+            elif label == 'Schedule type' and c.value in ('Automatic', 'Simple'):
+                c.value = CHROMA_SCHEDULER_VALUE
+            elif label == 'Sampling steps' and (c.value or 0) < CHROMA_STEPS_VALUE:
+                c.value = CHROMA_STEPS_VALUE
+            else:
+                continue
+            changed.append(f'{label}={c.value}')
+        except Exception:
+            continue          # never let a cosmetic default break the build
+    if changed:
+        print('[chroma] lazily-built tab bumped to chroma-friendly defaults: '
+              + ', '.join(changed))
+    return len(changed)
+
+
 def get_a1111_ui_component(tab, label):
     # LAZY IMG2IMG: when a tab body is deferred (built via gr.render on first select), its
     # add_paste_fields(tab, ...) has not run yet at forge_main_entry() time, so the tab key is
@@ -406,10 +457,14 @@ def forge_main_entry():
     #   CFG      <2  -> 4.0        (real CFG; 1.0 is pure blur)   back to 1.0
     #   scheduler Simple/Automatic -> Beta (converges better)     back to Simple
     #   steps    <26 -> 26         (chroma needs more than dev)   back to 20
-    # Lazy img2img may leave its components None; wire what exists.
-    CHROMA_CFG = 4.0
-    CHROMA_SCHEDULER = 'Beta'
-    CHROMA_STEPS = 26
+    # Lazy img2img may leave its components None; wire what exists. What it
+    # cannot reach is handled by apply_chroma_defaults() below, called from the
+    # lazy render once those components actually exist -- an event wired from
+    # here to render-created outputs would fire in every LATER session and
+    # crash it (see the note in modules/ui.py).
+    CHROMA_CFG = CHROMA_CFG_VALUE
+    CHROMA_SCHEDULER = CHROMA_SCHEDULER_VALUE
+    CHROMA_STEPS = CHROMA_STEPS_VALUE
     ui_txt2img_steps = get_a1111_ui_component('txt2img', 'Steps')
     ui_img2img_steps = get_a1111_ui_component('img2img', 'Steps')
     chroma_targets = [(c, kind) for c, kind in (
