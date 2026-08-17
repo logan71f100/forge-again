@@ -961,7 +961,8 @@ _UI_CONFIG_TAB_ALIAS = {
     "model downloader": "model_downloader",
 }
 
-_ui_config_cache = {"mtime": None, "exact": None, "labels": None, "steps": None}
+_ui_config_cache = {"mtime": None, "exact": None, "labels": None, "steps": None,
+                    "plain": None, "plain_steps": None}
 
 
 def _ui_config_index():
@@ -974,15 +975,16 @@ def _ui_config_index():
     ("modelmerger", "pnginfo") or a capitalised name ("Replacer"). Indexing on
     the LAST TWO path segments catches all of them at once.
     """
-    empty = ({}, {}, {})
+    empty = ({}, {}, {}, {}, {})
     try:
         mtime = os.path.getmtime(UI_CONFIG_FILE)
     except OSError:
         return empty
     if _ui_config_cache["mtime"] == mtime:
         return (_ui_config_cache["exact"], _ui_config_cache["labels"],
-                _ui_config_cache["steps"])
-    exact, labels, steps = {}, {}, {}
+                _ui_config_cache["steps"], _ui_config_cache["plain"],
+                _ui_config_cache["plain_steps"])
+    exact, labels, steps, plain, plain_steps = {}, {}, {}, {}, {}
     try:
         with open(UI_CONFIG_FILE, "r", encoding="utf-8") as f:
             cfg = json.load(f)
@@ -997,11 +999,22 @@ def _ui_config_index():
                 continue
             tab, label = parts[-2].strip().lower(), parts[-1].strip()
             sink.setdefault((tab, label), set()).add(str(val))   # list defaults are unhashable
+            # A PLAIN "<tab>/<label>" key is the tab's own control. Indexing on
+            # the last two segments alone lumps it together with every script
+            # that happens to reuse the name -- img2img's Width (1024) with
+            # Ultimate SD Upscale's tile Width (64), Sampling steps 25 with 20,
+            # Mask blur 4 with 8 -- and "every recorded default must agree" then
+            # kept all of them forever. That single collision was most of what
+            # survived pruning in a tab nobody had touched.
+            if len(parts) == 2:
+                (plain if sink is exact else plain_steps).setdefault(
+                    (tab, label), set()).add(str(val))
             if sink is exact:
                 labels.setdefault(tab, set()).add(label)
     _ui_config_cache.update({"mtime": mtime, "exact": exact, "labels": labels,
-                             "steps": steps})
-    return exact, labels, steps
+                             "steps": steps, "plain": plain,
+                             "plain_steps": plain_steps})
+    return exact, labels, steps, plain, plain_steps
 
 
 def _match_key(exact, labels, tabs, label):
@@ -1178,7 +1191,7 @@ def _prune_default_values(snapshots):
     Everything else is kept, so the worst case is a file that is still too big
     -- never a setting that silently disappears.
     """
-    exact, labels, steps = _ui_config_index()
+    exact, labels, steps, plain, plain_steps = _ui_config_index()
     if not exact:
         return snapshots
 
@@ -1198,14 +1211,34 @@ def _prune_default_values(snapshots):
                 continue
             if _is_unidentifiable(label):
                 continue
+            # An empty value is not a choice, it is a control that has not been
+            # populated: a dropdown whose options load asynchronously reads as
+            # "" until they arrive, which is how "ControlNet Unit 0 > Model",
+            # "SAM Model", "Script" and eight more got into the session for a
+            # tab nobody had configured. Restoring "" into a dropdown does
+            # nothing useful, and a control genuinely sitting at an empty
+            # default would be dropped by the comparison below anyway.
+            if str(val).strip() == "":
+                continue
             # a section prefix ("Replacer > ...") is often a tab of its own
             tabs = [tab_token]
             if " > " in label:
                 tabs.append(label.split(" > ")[0].strip().lower())
             hit = _match_key(exact, labels, tabs, label)
             known = exact.get(hit) if hit is not None else None
+            step_set = steps.get(hit)
+            # A BARE label means the tab's own control, so the plain
+            # "<tab>/<label>" key wins outright. Falling back to the union of
+            # every script that reuses the name is what kept Width (1024 vs
+            # Ultimate SD Upscale's tile 64), Sampling steps, Sampling method,
+            # Mask blur and Schedule type in an untouched img2img tab: the
+            # "all recorded defaults must agree" rule can never be satisfied
+            # when two different controls share a short name.
+            if hit is not None and " > " not in label and hit in plain:
+                known = plain[hit]
+                step_set = plain_steps.get(hit, step_set)
             if known:
-                if _is_default_value(val, known, steps.get(hit)):
+                if _is_default_value(val, known, step_set):
                     continue         # recorded default, and we are sitting on it
                 if _shapes_agree(val, known):
                     kept[label] = val
