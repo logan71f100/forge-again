@@ -112,9 +112,17 @@ def _enabled(root):
 
 
 def install(root=None):
-    """Start mirroring stdout/stderr. Safe to call more than once."""
+    """Start mirroring stdout/stderr. Safe to call more than once.
+
+    Once per PROCESS TREE, not once per process. Startup spawns short-lived
+    children -- the extension installers among them -- which inherit the launch
+    and would each open the log and announce themselves; the parent then
+    re-prints what it captured from them, so a single launch wrote six headers
+    and eleven notices. The marker goes in the environment precisely because
+    children inherit it and skip.
+    """
     global _installed
-    if _installed:
+    if _installed or os.environ.get("_FORGE_CONSOLE_LOG_ACTIVE") == "1":
         return None
     root = root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if not _enabled(root):
@@ -127,6 +135,7 @@ def install(root=None):
         sys.stdout = _Tee(sys.stdout, sink)
         sys.stderr = _Tee(sys.stderr, sink)
         _installed = True
+        os.environ["_FORGE_CONSOLE_LOG_ACTIVE"] = "1"   # children inherit; they skip
         print(f"[console-log] mirroring this console to {path} "
               f"(forge_client_forensics is on)")
         return path
