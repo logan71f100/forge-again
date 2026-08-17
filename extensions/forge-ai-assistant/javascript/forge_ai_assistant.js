@@ -1568,6 +1568,7 @@
             'When the user asks for a specific visual change, your FIRST move is the relevant prompt edit + generate — one focused change, not a bundle of slider tweaks.',
             'DO NOT RE-FETCH THE RESULT: the latest generated result is ALREADY attached to every generation tool-result and to the user\'s messages — you can see it. Never call get_image to "look at" the result; that wastes a whole round-trip. Judge the attached image directly. Use get_image ONLY to inspect the mask, and only when detection is unlocked and you suspect it is wrong (rare).',
             'MASK VERIFICATION: when a result looks wrong, check the SELECTION before blaming generation settings — {"tool":"get_image","which":"gallery"} shows the greyscale mask and the masked composite. Mask covers the wrong area / too little / too much → fix detection prompt, box threshold, or mask expand. Mask is correct but content is bad → then tune denoise/CFG/prompt. This order saves wasted generations.',
+            'NEVER CLAIM TO HAVE SEEN THE MASK. You cannot see it in the result image, and you cannot infer it from detection being locked. Phrases like "the mask appears to cover the area correctly" are FORBIDDEN unless a get_image mask/gallery call in THIS conversation actually attached it — the CURRENT STATE block tells you which it is. Saying it anyway rules out the selection on invented evidence and sends the next three turns after the wrong cause. If you have not looked, either look, or say "I have not checked the mask" and carry on with what you CAN see.',
             'BASELINE FIRST — your standing procedure on a new image/task:',
             '- Your FIRST action is a baseline generation with the user\'s current settings UNCHANGED: {"tool":"generate"} and NOTHING else. Do not touch ANY setting — especially not the detection prompt — before seeing the baseline. The user\'s existing settings are usually good. Sole exception: the user asked for a specific content change (e.g. a new replacement subject) — set exactly that, nothing more.',
             '- Detection starts LOCKED BY DEFAULT and detection settings are physically BLOCKED. The user\'s existing detection is usually already correct — leave it alone. Changing a working detection prompt is the #1 way you have ruined sessions.',
@@ -1626,10 +1627,39 @@
         return [
             '[CURRENT STATE — reference for your next action; respond to the conversation above using these live values]',
             'Current tab: ' + currentTabName() + '.',
+            maskVisibilityLine(),
             runLogSection(),
             'CONTROLS on the current tab (live values):',
             controlsListing(controls),
         ].filter(Boolean).join('\n');
+    }
+
+    // Say plainly whether the mask has been LOOKED AT, because the model will
+    // otherwise claim it has. Observed in a real session: three consecutive
+    // replies asserted "the mask appears to cover the area correctly" and ruled
+    // the selection out on that basis -- with get_image never called once in a
+    // 408-turn log, and mask images not even being produced. It then blamed the
+    // prompt three times running. An unverified premise stated as an
+    // observation is worse than no observation: it closes off the branch that
+    // would have found the real fault.
+    function maskVisibilityLine() {
+        const app = gradioApp();
+        const inpaint = /img2img/i.test(currentTabName() || '');
+        if (!inpaint) return '';
+        const galleryImgs = app.querySelectorAll('#img2img_gallery img').length;
+        if (sawMask) {
+            return 'MASK: you have fetched the mask this session — you may refer to what you saw.';
+        }
+        if (galleryImgs > 1) {
+            return 'MASK: NOT SEEN. Mask images appear to be in the gallery but you have not fetched them. '
+                 + 'Do NOT state or imply anything about what the mask covers until you call '
+                 + '{"tool":"get_image","which":"mask"}. Say "I have not checked the mask" instead of guessing.';
+        }
+        return 'MASK: NOT SEEN, and NOT AVAILABLE — "Save a copy of the greyscale mask" and '
+             + '"Save a masked composite" are off in Settings, so no mask image exists to fetch. '
+             + 'You CANNOT know what the mask covers. Do not claim it looks correct, and do not rule '
+             + 'the selection out as a cause. If the mask is genuinely in question, tell the user to '
+             + 'enable those two settings.';
     }
 
     // Brace-scan every top-level {...} span in a string (string-literal aware).
@@ -2738,10 +2768,21 @@
             // — those are legitimate steps and must be allowed to execute.
             const navOrInspect = tools.some(t => ['get_image', 'unlock_detection', 'lock_detection', 'switch_tab', 'revert', 'click', 'verdict', 'remember'].includes(t.tool));
             const saidPrompt = /(adjust|refin|change|updat|modif|edit|rewrit|improv|tweak|emphasi|add to)[^.]{0,45}(positive|negative)[^.]{0,10}prompt/i.test(reply);
-            const didPromptSet = tools.some(t => t.tool === 'set' && /positive prompt|negative prompt/i.test(String(t.label)) && !/detection/i.test(String(t.label)));
+            // The positive prompt is labelled "Prompt", not "Positive prompt" --
+            // that is what scanControls names it and what the model is shown in
+            // the controls listing, so it correctly issues
+            // {"tool":"set","label":"Prompt"}. Requiring the words "positive
+            // prompt" therefore never matched a positive-prompt edit: the turn
+            // was judged as "described a prompt change but did not make one",
+            // nudged, and `continue`d before it could generate -- so it rewrote
+            // the prompt again, was told again that it had not, and looped.
+            // Observed five turns running, with no generation in between.
+            const isPromptLabel = (l) => /\bprompt\b/i.test(l)
+                && !/detection|example|styles|template/i.test(l);
+            const didPromptSet = tools.some(t => t.tool === 'set' && isPromptLabel(String(t.label)));
             if (saidPrompt && !didPromptSet && !navOrInspect && !stopRequested) {
                 sysMsg('↩ it described a prompt change but did not make one — requiring it');
-                messages.push({ role: 'user', content: '[system] You said the PROMPT is the problem but you did not edit it — you changed a slider instead. That is the failure loop. NOW issue the actual edit: {"tool":"set","label":"Positive prompt","value":"<the full new positive prompt>"} (and/or "Negative prompt"), then {"tool":"generate"}. Write the real prompt text; do not adjust a slider this turn.' });
+                messages.push({ role: 'user', content: '[system] You said the PROMPT is the problem but you did not edit it — you changed a slider instead. That is the failure loop. NOW issue the actual edit: {"tool":"set","label":"Prompt","value":"<the full new positive prompt>"} (and/or "Negative prompt"), then {"tool":"generate"}. Use the label EXACTLY as it appears in the controls listing — the positive prompt is "Prompt". Write the real prompt text; do not adjust a slider this turn.' });
                 persistChat();
                 continue;
             }
