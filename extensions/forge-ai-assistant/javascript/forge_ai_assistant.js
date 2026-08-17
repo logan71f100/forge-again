@@ -1655,11 +1655,16 @@
                  + 'Do NOT state or imply anything about what the mask covers until you call '
                  + '{"tool":"get_image","which":"mask"}. Say "I have not checked the mask" instead of guessing.';
         }
-        return 'MASK: NOT SEEN, and NOT AVAILABLE — "Save a copy of the greyscale mask" and '
-             + '"Save a masked composite" are off in Settings, so no mask image exists to fetch. '
-             + 'You CANNOT know what the mask covers. Do not claim it looks correct, and do not rule '
-             + 'the selection out as a cause. If the mask is genuinely in question, tell the user to '
-             + 'enable those two settings.';
+        // NB the gallery is fed by the RETURN options, not the SAVE ones:
+        // save_mask writes a file to the output folder and puts nothing in the
+        // results (processing.py -- the image is built if either is set, but
+        // only appended when return_mask is on).
+        return 'MASK: NOT SEEN, and possibly NOT AVAILABLE — if the gallery holds only the result, '
+             + 'then "include the greyscale mask in results for web" and "include masked composite '
+             + 'in results for web" are off in Settings, and no mask image exists to fetch. '
+             + 'You CANNOT know what the mask covers. Do not claim it looks correct and do not rule '
+             + 'the selection out as a cause. Try {"tool":"get_image","which":"mask"} once; if it '
+             + 'reports nothing available, tell the user to enable those two settings.';
     }
 
     // Brace-scan every top-level {...} span in a string (string-literal aware).
@@ -1834,7 +1839,7 @@
                 if (t.which === 'mask') {
                     const imgs = await captureGallery();
                     const maskImgs = imgs.slice(1);   // [0]=result, rest are mask/composite
-                    if (!maskImgs.length) { feedback.push('[tool error] no mask/composite images in the gallery — generate first, or the mask preview is off'); return; }
+                    if (!maskImgs.length) { feedback.push('[tool error] no mask/composite images in the gallery. Either no inpaint has run yet on this tab, or Settings > "include the greyscale mask in results for web" and "include masked composite in results for web" are off (note: the SAVE-mask options write files to disk and do NOT put anything in the gallery). Say so plainly rather than guessing what the mask covers.'); return; }
                     maskImgs.forEach(u => followupImages.push({ type: 'image_url', image_url: { url: u } }));
                     sawMask = true;
                     sysMsg('🔍 mask/composite attached for verification');
