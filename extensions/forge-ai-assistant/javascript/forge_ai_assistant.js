@@ -1843,7 +1843,11 @@
                     maskImgs.forEach(u => followupImages.push({ type: 'image_url', image_url: { url: u } }));
                     sawMask = true;
                     sysMsg('🔍 mask/composite attached for verification');
-                    feedback.push('[tool result] the greyscale MASK and masked composite are attached. Check ONLY whether the mask covers the intended region. If it covers the area the user mentioned, the mask is FINE — the problem is generation (denoise/steps/prompt), keep detection locked. Only if the mask genuinely misses/over-covers may you unlock_detection.');
+                    // one image or two: the greyscale mask and the masked
+                    // composite are separate settings, and the composite alone
+                    // is the common setup (it shows the region against the real
+                    // picture instead of a mostly-black frame)
+                    feedback.push('[tool result] the selection image(s) are attached — a masked composite showing the inpainted region against the picture, and the greyscale mask too if that option is on. Check ONLY whether the selection covers the intended region. If it covers the area the user mentioned, the mask is FINE — the problem is generation (denoise/steps/prompt), keep detection locked. Only if the mask genuinely misses/over-covers may you unlock_detection.');
                     return;
                 }
                 if (t.which === 'gallery') {
