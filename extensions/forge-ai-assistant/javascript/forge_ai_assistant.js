@@ -849,6 +849,55 @@
         return null;
     }
 
+    // Read the inpaint mask straight off the canvas the user painted on.
+    //
+    // The alternative was Forge's return_mask/return_mask_composite options,
+    // which append extra images to the gallery after a run. That costs a
+    // settings change, puts a solid black frame next to every result (which
+    // reads as a failed generation), and only ever shows the mask AFTER
+    // generating -- too late to catch a bad selection. ForgeCanvas keeps the
+    // picture in an <img id="image_*"> and the strokes in a separate
+    // <canvas id="drawingCanvas_*">, so both are already in the page: compose
+    // them here and the model sees the selection live, before a single step
+    // has run, with nothing about the user's setup changed.
+    async function captureInpaintMask() {
+        const root = activeTabRoot();
+        const draw = [...root.querySelectorAll('canvas[id^="drawingCanvas_"]')]
+            .filter(visible).sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
+        if (!draw || !draw.width || !draw.height) return null;
+
+        // Nothing painted yet? Say so rather than handing over an empty frame
+        // and letting the model read meaning into it.
+        try {
+            const g = draw.getContext('2d', { willReadFrequently: true });
+            const px = g.getImageData(0, 0, draw.width, draw.height).data;
+            let painted = false;
+            for (let i = 3; i < px.length; i += 4) {
+                if (px[i] > 8) { painted = true; break; }
+            }
+            if (!painted) return null;
+        } catch (e) { /* tainted canvas — carry on and let them look */ }
+
+        const bg = [...root.querySelectorAll('img[id^="image_"]')]
+            .filter(v => visible(v) && v.naturalWidth)[0];
+        const c = document.createElement('canvas');
+        c.width = draw.width;
+        c.height = draw.height;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, c.width, c.height);
+        if (bg) {
+            try { ctx.drawImage(bg, 0, 0, c.width, c.height); } catch (e) { /* cross-origin */ }
+        }
+        // the strokes over the picture: the region is unmistakable and the
+        // surrounding image gives the model something to judge it against,
+        // which a bare greyscale mask does not
+        ctx.globalAlpha = 0.55;
+        ctx.drawImage(draw, 0, 0, c.width, c.height);
+        ctx.globalAlpha = 1;
+        return toDataURL(c, 1024);
+    }
+
     // ------------------------------------------------------ generation
 
     function findGenerateButton() {
@@ -1650,10 +1699,12 @@
         if (sawMask) {
             return 'MASK: you have fetched the mask this session — you may refer to what you saw.';
         }
-        if (galleryImgs > 1) {
-            return 'MASK: NOT SEEN. Mask images appear to be in the gallery but you have not fetched them. '
-                 + 'Do NOT state or imply anything about what the mask covers until you call '
-                 + '{"tool":"get_image","which":"mask"}. Say "I have not checked the mask" instead of guessing.';
+        const painted = !!app.querySelector('canvas[id^="drawingCanvas_"]');
+        if (galleryImgs > 1 || painted) {
+            return 'MASK: NOT SEEN, but available — {"tool":"get_image","which":"mask"} reads the '
+                 + 'inpaint selection straight off the canvas, so it works even before a run. Do NOT '
+                 + 'state or imply anything about what the mask covers until you have called it. '
+                 + '"I have not checked the selection" is a fine thing to say; guessing is not.';
         }
         // NB the gallery is fed by the RETURN options, not the SAVE ones:
         // save_mask writes a file to the output folder and puts nothing in the
@@ -1837,9 +1888,19 @@
                 // explicit mask inspection — works even while detection is locked,
                 // so the model can verify coverage BEFORE deciding to unlock
                 if (t.which === 'mask') {
+                    // the painted canvas first: available before any run, and
+                    // it needs no gallery options turned on
+                    const live = await captureInpaintMask();
+                    if (live) {
+                        followupImages.push({ type: 'image_url', image_url: { url: live } });
+                        sawMask = true;
+                        sysMsg('🔍 inpaint selection attached (read from the canvas)');
+                        feedback.push('[tool result] the CURRENT inpaint selection is attached — your painted region shown over the picture, read live from the canvas, so it is what will be used by the next run. Check ONLY whether it covers the intended area. If it does, the selection is FINE and any problem is generation (denoise/steps/prompt) — keep detection locked.');
+                        return;
+                    }
                     const imgs = await captureGallery();
                     const maskImgs = imgs.slice(1);   // [0]=result, rest are mask/composite
-                    if (!maskImgs.length) { feedback.push('[tool error] no mask/composite images in the gallery. Either no inpaint has run yet on this tab, or Settings > "include the greyscale mask in results for web" and "include masked composite in results for web" are off (note: the SAVE-mask options write files to disk and do NOT put anything in the gallery). Say so plainly rather than guessing what the mask covers.'); return; }
+                    if (!maskImgs.length) { feedback.push('[tool error] nothing is painted on the inpaint canvas, and the gallery holds no mask images. So there is NO selection to look at: either the user has not masked anything yet, or this is not an inpaint tab. Say that plainly — do not guess what a mask covers, and do not rule the selection in or out.'); return; }
                     maskImgs.forEach(u => followupImages.push({ type: 'image_url', image_url: { url: u } }));
                     sawMask = true;
                     sysMsg('🔍 mask/composite attached for verification');
