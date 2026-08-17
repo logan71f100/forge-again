@@ -878,6 +878,29 @@ def _wait_textgen_gone(timeout=8.0):
     return False
 
 
+def _wait_llm_parked(timeout=30.0):
+    """Block until the LLM has ACTUALLY released its VRAM.
+
+    /sleep answering 200 does not mean the memory is back. llama-server will not
+    hibernate while a completion is in flight, and a long vision reply runs for
+    tens of seconds: the console shows the sleep request, then twenty more
+    seconds of `n_decoded` climbing. Returning immediately on that 200 let Forge
+    start a generation into a card that was still 94% full -- which is how a run
+    sat at progress 0.0, and how another died mid-sampling with "weight is on
+    cpu, different from other tensors on cuda:0" after the memory manager
+    evicted weights under the pressure.
+
+    Poll /props, which reports the real hibernation state, rather than trusting
+    the acknowledgement.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _llm_sleeping():
+            return True
+        time.sleep(0.4)
+    return False
+
+
 def _stop_textgen(mode="soft"):
     # soft: hibernate — ALL VRAM freed in ~1.7s, server stays up, KV cache
     # (incl. encoded images) kept in pinned host RAM for a ~1.5s wake.
@@ -1472,6 +1495,15 @@ class ForgeAIAssistantScript(scripts_mod.Script):
                 print("[forge-ai] generation starting — soft-unloading LLM to free VRAM")
                 result = _stop_textgen("soft")
                 if not result.get("soft"):
+                    _wait_textgen_gone(8.0)
+                elif not _wait_llm_parked(30.0):
+                    # Still holding VRAM after 30s: it is mid-completion and
+                    # will not park. Generating alongside it means paging at
+                    # best and an evicted-weights crash at worst, so take the
+                    # memory back the blunt way -- the KV cache is worth less
+                    # than the run the user is waiting on.
+                    print("[forge-ai] LLM did not hibernate (busy generating) — killing it to free VRAM")
+                    _stop_textgen("kill")
                     _wait_textgen_gone(8.0)
                 _auto["stopped_for_gen"] = True
                 _spawn_restore_thread()
