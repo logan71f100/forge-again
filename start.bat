@@ -181,6 +181,13 @@ if defined FORGE_NO_BROWSER set "AUTOLAUNCH="
 :launch
 set /p CKMODE=<"%~dp0current_mode.txt"
 set "SD_WEBUI_RESTART=1"
+rem Unbuffered stdout. Python block-buffers when its output is a FILE rather
+rem than a console, so `start.bat > run.log` -- the capture this script tells
+rem people to use for a bug report -- runs thousands of characters behind. A
+rem stalled generation's console output was still sitting unflushed in the
+rem buffer while that very stall was being diagnosed, which is precisely when
+rem it is needed and precisely when the process will not exit to flush it.
+set "PYTHONUNBUFFERED=1"
 set "HF_HOME=%FORGE_MODELS_DIR%\hf-cache"
 "%VENV%\Scripts\python.exe" "%~dp0launch.py" --listen --port %FORGE_PORT% --api --cuda-malloc --no-half-vae --disable-xformers --skip-python-version-check --ckpt-dir "%FORGE_MODELS_DIR%\checkpoints\%CKMODE%" --lora-dir "%FORGE_MODELS_DIR%\Lora" --vae-dir "%FORGE_MODELS_DIR%\VAE" --text-encoder-dir "%FORGE_MODELS_DIR%\text_encoder" --esrgan-models-path "%FORGE_MODELS_DIR%\ESRGAN" %AUTOLAUNCH% %EXTRA_ARGS% %FORGE_EXTRA_ARGS%
 
