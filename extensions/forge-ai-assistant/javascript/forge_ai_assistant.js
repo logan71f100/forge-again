@@ -368,6 +368,22 @@
         // textareas (prompts etc.)
         root.querySelectorAll('textarea').forEach(ta => {
             if (!scannable(ta)) return;
+            // NEVER touch the ForgeCanvas transport binds. These hidden
+            // textareas are how whole images move between the canvas and the
+            // server (LogicalImage, canvas.py) -- they are a channel, not a
+            // setting, and their contents are a path to one particular upload.
+            //
+            // Capturing them meant restore wrote a stale "forge-file:..."
+            // marker back into the bind. That is not a loadable URL, so the
+            // canvas's img.onload never fires, this.img is never set, and what
+            // gets uploaded instead is an EMPTY canvas. Server-side,
+            // images.flatten() turns fully transparent into
+            // img2img_background_color -- #ffffff -- so the model was handed a
+            // blank white init image and returned white outside the mask and
+            // black inside it. A 100 ms poller in canvas.min.js watches these
+            // for outside changes, which is why it only bit sometimes.
+            if (ta.closest('.logical_image_background, .logical_image_foreground')) return;
+            if (/^forge-file:/i.test(ta.value || '')) return;
             const block = ta.closest('.block') || ta.parentElement;
             let label = labelFor(block, ta.placeholder);
             const bid = block.id || '';
@@ -2363,6 +2379,16 @@
             const pending = new Map(Object.entries(snaps[tab]));
             const subtab = pending.get('__subtab');
             pending.delete('__subtab');
+            // Sessions saved before the capture-side guard still carry the
+            // canvas transport binds. Writing a stale "forge-file:" marker back
+            // hands the model a blank white init image (see scanControls), so
+            // drop them here too rather than waiting for the file to heal.
+            for (const k of [...pending.keys()]) {
+                if (/^(fore|back)ground(\s*#\d+)?$/i.test(k)
+                    || /^forge-file:/i.test(String(pending.get(k) || ''))) {
+                    pending.delete(k);
+                }
+            }
             const isQS = (tab === '__quicksettings');
             const err = isQS ? null : await switchTab(tab);
             if (err) { failed += pending.size; continue; }
@@ -2495,9 +2521,29 @@
                             const head = acc.querySelector('.label-wrap');
                             if (head) {
                                 // InputAccordions (Refiner, Hires fix…) treat a header
-                                // click as ENABLE — expand those without toggling the value
-                                if (acc.classList.contains('input-accordion') && acc.expandOnly) acc.expandOnly();
-                                else head.click();
+                                // click as ENABLE — expand those without toggling the value.
+                                //
+                                // expandOnly() is the safe path, but it is attached in
+                                // onAfterUiUpdate and gradio 6 mounts accordions late, so
+                                // on an unlucky restore it is not there yet. The old
+                                // `&& acc.expandOnly` then fell through to head.click(),
+                                // and a LINKED InputAccordion ties open-state to its
+                                // enable checkbox (inputAccordion.js:23-33: the observer
+                                // sets visibleCheckbox.checked = isOpen() and fires
+                                // onVisibleCheckboxChange) — so opening it switched the
+                                // script ON server-side. That is how a restore enabled the
+                                // Refiner with a foreign checkpoint and swapped the UNet
+                                // partway through sampling. If it cannot be expanded
+                                // safely, leave it shut: a value we fail to restore is
+                                // recoverable, a feature we silently enable is not.
+                                if (acc.classList.contains('input-accordion')) {
+                                    if (!acc.expandOnly) {
+                                        console.log('[forge-ai] not expanding "' + title
+                                            + '" — expandOnly is not ready and a click would enable it');
+                                        continue;
+                                    }
+                                    acc.expandOnly();
+                                } else head.click();
                                 revealed = true;
                                 for (let w = 0; w < 10 && !bodyHasInputs(); w++) await sleep(250);
                             }

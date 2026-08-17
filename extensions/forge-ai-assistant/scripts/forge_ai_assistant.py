@@ -1255,6 +1255,17 @@ def _prune_default_values(snapshots):
                 continue
             if _is_unidentifiable(label):
                 continue
+            # ForgeCanvas transport binds are not settings. These hidden
+            # textareas carry whole images between the canvas and the server,
+            # and their contents point at one particular upload. Restoring a
+            # stale "forge-file:" marker is not a no-op: it is not a loadable
+            # URL, so the canvas uploads an EMPTY frame instead, which
+            # images.flatten() turns into solid img2img_background_color. The
+            # model then gets a blank white init image and returns white
+            # outside the mask and black inside it.
+            if (label.lower().split(" #")[0] in ("foreground", "background")
+                    or str(val).startswith("forge-file:")):
+                continue
             # An empty value is not a choice, it is a control that has not been
             # populated: a dropdown whose options load asynchronously reads as
             # "" until they arrive, which is how "ControlNet Unit 0 > Model",
