@@ -1882,6 +1882,26 @@
                     feedback.push(`[tool error] no control labelled "${t.label}" found.` + (near ? ` Similar controls: ${near}` : ''));
                     return;
                 }
+                // KEEP THE LoRA TAGS. A rewritten prompt that drops
+                // <lora:...> silently unloads that LoRA, and some models only
+                // work with one loaded: Chroma at CFG 1 with the flash-heun
+                // LoRA is a normal picture, and the same run without it washes
+                // out to white. That is precisely what happened -- the rewrite
+                // dropped <lora:chroma-flash-heun_r32-fp32:1>, the broken
+                // prompt was captured into the session, and every restore
+                // afterwards put it back. The model is rewriting prose, not
+                // choosing LoRAs, so carry any it left out back over.
+                if (/prompt/i.test(c.label) && !/detection|negative/i.test(c.label) && c.kind === 'text') {
+                    const had = String(c.get() || '').match(/<lora:[^>]+>/gi) || [];
+                    const kept = String(t.value || '').match(/<lora:[^>]+>/gi) || [];
+                    const lost = had.filter(tag => !kept.some(k => k.toLowerCase() === tag.toLowerCase()));
+                    if (lost.length) {
+                        t.value = String(t.value).trimEnd() + ' ' + lost.join(' ');
+                        sysMsg('🔗 kept ' + lost.length + ' LoRA tag(s) your rewrite dropped: ' + lost.join(' '));
+                        feedback.push('[note] your new prompt omitted ' + lost.join(' ')
+                            + ' — those LoRA tags were carried over automatically, because dropping one silently unloads it and can change the output completely (a model tuned for CFG 1 washes out without its flash LoRA). If you genuinely intend to remove a LoRA, say so in your reasoning first.');
+                    }
+                }
                 // reject a no-op prompt edit — re-adding words already present
                 // does nothing and just produces another tie
                 if (/prompt/i.test(c.label) && !/detection/i.test(c.label) && c.kind === 'text') {
