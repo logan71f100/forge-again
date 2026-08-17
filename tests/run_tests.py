@@ -435,7 +435,12 @@ SESSION_SNAPSHOT = {
         "Auto SAM Config > crop_overlap_ratio": "0.34",  # slider quantizes to its step
         "Styles": "",                                    # empty multiselect, recorded as []
         "Hires. fix": "false",                           # accordion toggle matching a same-named dropdown
-        "Balanced": "Balanced",                          # unlabeled radio on its first option
+        "Balanced": "Balanced",                          # radio on its first option -- KEPT: the
+                                                         # first option is not always the default
+                                                         # (img2img's Inpaint area defaults to
+                                                         # "Only masked", first option "Whole
+                                                         # picture"), so dropping these lost a real
+                                                         # setting on restore
         "(start)": "4",                                  # unlabelled double-ended slider: names nothing
         "(end) #2": "100",                               # ditto, with the dedupe suffix
         "ControlNet Unit 1 > (start)": "7",              # SAME decoration, but the prefix names it
@@ -445,12 +450,13 @@ SESSION_SNAPSHOT = {
         "__subtab": "Generation",
     },
     "Extras": {                                          # opened, never configured
-        "Balanced": "Balanced",
+        "Upscaler 2": "",                                # unpopulated dropdown, not a choice
+        "(end)": "100",                                  # names no control
         "__subtab": "Single Image",
     },
 }
 
-SESSION_EXPECTED = {"Txt2img": {"Prompt", "Height", "fill", "__subtab",
+SESSION_EXPECTED = {"Txt2img": {"Prompt", "Height", "fill", "__subtab", "Balanced",
                                 "ControlNet Unit 1 > (start)"}}
 
 

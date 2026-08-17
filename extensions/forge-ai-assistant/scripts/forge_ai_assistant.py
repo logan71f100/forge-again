@@ -1157,6 +1157,27 @@ def _is_unidentifiable(label):
 
 
 def _is_first_choice(label, val):
+    """DISABLED -- kept only so old callers do not break. See below.
+
+    The idea was that an unlabelled radio captured under its first option's text
+    ("Balanced" = "Balanced") is sitting on its build default, so the entry can
+    go. That assumption is false whenever a control's recorded default is NOT
+    its first option, and img2img has exactly such a control:
+
+        img2img/Inpaint area/value = 'Only masked'      <- default
+        first option, and so the capture label            = 'Whole picture'
+
+    Choosing "Whole picture" is therefore a REAL change that this rule deleted,
+    and restore then left the page on 'Only masked'. That is a silently lost
+    setting, which is the one failure this whole subsystem exists to prevent --
+    and it cost a user their inpaint area after a restore. The entries it used
+    to remove were harmless noise: restoring a radio to the option it is already
+    on is a no-op. Noise is recoverable; a lost setting is not.
+    """
+    return False
+
+
+def _unused_is_first_choice(label, val):
     """An unlabeled radio still sitting on its first option.
 
     Gradio 6 gives a radio GROUP no title element of its own, so the capture

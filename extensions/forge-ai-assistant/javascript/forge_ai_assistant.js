@@ -2525,6 +2525,17 @@
                     + ': ' + res.applied + ' value(s) applied'
                     + (res.repaired ? ', ' + res.repaired + ' re-applied after the UI overwrote them' : '')
                     + (res.failed ? ' (' + res.failed + ' could not be matched — a model/extension may have changed)' : ''));
+                // NAME the ones that did not land. They were only ever written
+                // to the browser console, so "it missed the scheduler" was
+                // something the user had to notice by eye and report, with no
+                // way to tell a value that failed to apply from one that was
+                // never saved. The distinction is the whole diagnosis.
+                if (res.unmatched && res.unmatched.length) {
+                    const shown = res.unmatched.slice(0, 12).join(', ');
+                    sysMsg('⚠ not restored: ' + shown
+                        + (res.unmatched.length > 12 ? ' … and ' + (res.unmatched.length - 12) + ' more' : '')
+                        + ' — these were saved but could not be found on the page.');
+                }
             } finally {
                 uiRestoring = false;
             }
