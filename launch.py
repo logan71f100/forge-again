@@ -1,7 +1,13 @@
 # import faulthandler
 # faulthandler.enable()
 
-from modules import launch_utils
+from modules import console_log, launch_utils
+
+# Before anything else prints. The model loads and memory decisions that explain
+# a bad run happen during startup, and none of that console survived unless
+# somebody had thought to redirect it -- which block-buffers, so it was missing
+# during the one situation that needs it.
+console_log.install()
 
 args = launch_utils.args
 python = launch_utils.python

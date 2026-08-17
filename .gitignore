@@ -117,6 +117,8 @@ coverage.xml
 /_v.log
 /_v.err.log
 *.log
+# rotation backups: "*.log" does not match "server-console.log.1"
+*.log.1
 
 # local launcher leftovers & backups
 /run.bat.stock-backup
