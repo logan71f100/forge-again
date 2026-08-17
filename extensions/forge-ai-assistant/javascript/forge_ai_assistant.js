@@ -758,6 +758,24 @@
 
     function findControl(controls, label) {
         const want = String(label).toLowerCase();
+        // A BARE "prompt" / "negative prompt" means the tab's own prompt box and
+        // nothing else. The substring rule below matches any label CONTAINING
+        // the word, in DOM order, so on a page carrying Replacer, SUPIR and a
+        // detection prompt it happily typed the user's positive prompt into
+        // whichever came first -- observed landing in Replacer, which also
+        // opened that tab. Forge gives the real ones stable ids
+        // (<tab>_prompt / <tab>_neg_prompt), so resolve those directly.
+        if (/^(positive |negative )?prompt$/.test(want.trim())) {
+            const negative = /negative/.test(want);
+            const canonical = controls.find(c => {
+                if (!c.el || c.kind !== 'text') return false;
+                const box = c.el.closest('[id$="_prompt"], [id$="_neg_prompt"]');
+                if (!box) return false;
+                const isNeg = /_neg_prompt$/.test(box.id);
+                return negative ? isNeg : !isNeg;
+            });
+            if (canonical) return canonical;
+        }
         // "Section > Control" entries must never fuzzy-match the Section's own
         // toggle ("Hires. fix > Denoising strength" vs the "Hires. fix" checkbox)
         const sectionOf = want.split(' > ')[0].trim();
