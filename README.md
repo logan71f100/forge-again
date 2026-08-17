@@ -90,7 +90,11 @@ docker compose up -d # Docker         (any host with the NVIDIA Container Toolki
 
 Each **native** launcher is fully self-contained: on first run it downloads a portable Python 3.12 (and, on Windows, a portable git if you don't have one), builds the venv, installs PyTorch and all dependencies (several GB), downloads the AI assistant's vision model (~18 GB, unless `FORGE_NO_LLM=1`), then starts the UI listening on `http://0.0.0.0:7860` (`--listen` is default; set `FORGE_PORT` to change the port, `FORGE_MODELS_DIR` to use an external models folder — default is `.\models`, and the LLM lands in `<models>\llm\`). A browser opens automatically (`FORGE_NO_BROWSER=1` to suppress). Re-runs skip completed steps and start in seconds. The **Docker** image works differently — dependencies are baked in at build time, so the container starts in ~30 s with no bootstrap; see [docs/install-docker.md](docs/install-docker.md).
 
-You still supply your own Stable Diffusion checkpoints (see the layout below) — those are not downloaded for you.
+You still supply your own Stable Diffusion checkpoints — those are not downloaded for you.
+**[docs/first-models.md](docs/first-models.md) walks one complete working setup through step by
+step**, with verified download links and sizes: any SD 1.5/SDXL checkpoint, or Chroma in flux
+mode with the three sidecar files it needs — including which VAE link to avoid, because the
+obvious one is gated and answers HTTP 401 in a way that reads as a broken install.
 
 Model layout: checkpoints go in `models\checkpoints\sd|xl|flux\` (one folder per mode — the mode switcher scans the matching folder); LoRAs in `models\Lora`, VAEs in `models\VAE`, text encoders in `models\text_encoder`, upscalers in `models\ESRGAN`. Flux mode expects `ae.safetensors` in `models\VAE` and `clip_l.safetensors` + `t5xxl_fp8_e4m3fn.safetensors` in `models\text_encoder`. SAM/GroundingDINO detection models go in `extensions\sd-webui-segment-anything\models\sam` and `...\grounding-dino`.
 

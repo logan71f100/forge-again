@@ -40,6 +40,12 @@ models/Lora  models/VAE  models/text_encoder  models/ESRGAN
 
 Point `FORGE_MODELS_DIR` at an existing collection to avoid copying.
 
+**New here? [first-models.md](first-models.md) is a step-by-step walkthrough** with verified
+links and sizes. On 16 GB of unified memory, Chroma `Q4_K_M` (5.18 GiB) plus the fp8 T5 comes
+to about 10.3 GiB and leaves room to work, where `Q6_K` is tight enough to swap. GGUF does run
+on Metal: the dequantizer is plain PyTorch with no CUDA kernel, and this launcher already
+exports `PYTORCH_ENABLE_MPS_FALLBACK=1` for the integer operations Metal does not implement.
+
 ## What to expect
 
 - **CUDA-specific launch arguments don't apply.** `--cuda-malloc` is a no-op, and the
