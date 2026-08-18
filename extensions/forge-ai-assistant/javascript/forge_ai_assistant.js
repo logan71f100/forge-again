@@ -2234,6 +2234,15 @@
     // it. Seeded from the saved session so a restart does not forget, and from
     // a restore so restored-but-untouched tabs are not dropped on the next save.
     const uiEditedTabs = new Set();
+    // Until the stored session has been read at boot, this set is EMPTY but not
+    // MEANINGFUL -- nothing has been edited yet in this page, and what previous
+    // pages edited has not arrived. Sending an empty list in that window told
+    // the server "nothing has ever been edited", and it then filtered every tab
+    // except the active one out of the stored file. A reload followed by any
+    // save therefore destroyed the other tabs before Restore could read them.
+    // Omit the field entirely until seeding finishes; absent means "unknown",
+    // which is exactly the truth at that point.
+    let uiEditedTabsSeeded = false;
     let lastUiSnapJson = '';
     let lastScanKinds = {};      // {slider: N, dropdown: N, ...} from the last capture — save diagnostics
     const UI_SKIP_TABS = /^(settings|extensions)$/i;   // never bulk-write Forge settings
@@ -2642,7 +2651,7 @@
                     v: 2, ts: Date.now(),
                     uiSnapshots: uiSnapshots,
                     uiActiveTab: uiActiveTab,
-                    uiEditedTabs: [...uiEditedTabs],
+                    ...(uiEditedTabsSeeded ? { uiEditedTabs: [...uiEditedTabs] } : {}),
                 }, 60000);
             } catch (e) { /* autosave is best-effort */ }
         };
@@ -3492,7 +3501,14 @@
                 // edited. A legacy session re-earns a tab the moment it is
                 // actually touched, which is the whole point.
                 for (const t of (r.state.uiEditedTabs || [])) uiEditedTabs.add(t);
-            } catch (e) { /* no stored session yet */ }
+            } catch (e) { /* no stored session yet */ } finally {
+                // Seeded means "we have finished asking", not "we found
+                // something". A fresh install with no stored session, or a
+                // failed read, must still let the gate work -- otherwise the
+                // field would be withheld forever and untouched tabs would
+                // start accumulating again.
+                uiEditedTabsSeeded = true;
+            }
 
             // The connection watchdog reloads the page by itself when the server
             // comes back with a new boot id. That reload is not something the
@@ -3610,7 +3626,8 @@
                 if (!Object.keys(uiSnapshots).length) return;   // never clobber a good save with nothing
                 const blob = new Blob(
                     [JSON.stringify({ v: 2, ts: Date.now(), uiSnapshots: uiSnapshots,
-                        uiActiveTab: uiActiveTab, uiEditedTabs: [...uiEditedTabs] })],
+                        uiActiveTab: uiActiveTab,
+                        ...(uiEditedTabsSeeded ? { uiEditedTabs: [...uiEditedTabs] } : {}) })],
                     { type: 'application/json' });
                 navigator.sendBeacon('/forge-ai/session/save', blob);
             } catch (e) { /* best-effort */ }
