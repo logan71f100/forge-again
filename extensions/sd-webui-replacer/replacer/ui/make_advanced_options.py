@@ -104,19 +104,28 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
                         __o.environ["REPLACER_FLUX_GUIDANCE"] = str(v)
                     comp.distilled_cfg_scale.release(_save_dcfg, inputs=[comp.distilled_cfg_scale])
                 import os as _qlo
-                _qmode = "xl"
-                try:
-                    _qmode = open(_CURRENT_MODE_PATH).read().strip()
-                except Exception:
-                    pass
+                # Build the chip list for EVERY mode and let the browser pick.
+                # This block is a gr.HTML constructed once, when the server
+                # builds its Blocks -- a page reload re-serves the same HTML, so
+                # anything baked in here is fixed until the server restarts.
+                # Reading current_mode.txt at build time meant a server that
+                # started in xl kept offering xl LoRAs (and a label saying "xl
+                # mode") for the rest of its life, however many times the user
+                # switched to flux. Each chip now carries its own data-mode and
+                # replacer_flux_slider.js hides the ones that do not match the
+                # live mode radio, so switching mode updates it immediately.
                 _qld = shared.cmd_opts.lora_dir if getattr(shared.cmd_opts, 'lora_dir', None) else _qlo.path.join(_webui_root, "models", "Lora")
-                _qloras = []
-                for _qd in (_qld, _qlo.path.join(_qld, _qmode)):
+                _qloras = []          # (name, mode) -- "" mode means show always
+                if _qlo.path.isdir(_qld):
+                    _qloras += [(_x[:-12], "") for _x in _qlo.listdir(_qld) if _x.endswith(".safetensors")]
+                for _qm in ("sd", "xl", "flux"):
+                    _qd = _qlo.path.join(_qld, _qm)
                     if _qlo.path.isdir(_qd):
-                        _qloras += [_x[:-12] for _x in _qlo.listdir(_qd) if _x.endswith(".safetensors")]
+                        _qloras += [(_x[:-12], _qm) for _x in _qlo.listdir(_qd) if _x.endswith(".safetensors")]
                 _qloras = sorted(set(_qloras))
                 with gr.Row():
-                    gr.HTML("<b>Quick-add LoRA</b> (" + _qmode + " mode) - click to append to the positive prompt")
+                    gr.HTML("<b>Quick-add LoRA</b> <span class='replacer-lora-mode'></span>"
+                            " - click to append to the positive prompt")
                 with gr.Row(elem_id="replacer_quick_loras"):
                     # Plain HTML chips + ONE delegated DOM listener
                     # (replacer_flux_slider.js) instead of a gradio js-only
@@ -126,8 +135,9 @@ def makeAdvancedOptions(comp: AttrDict, isDedicatedPage: bool):
                     # at once). A delegated listener cannot multiply.
                     import html as _qhtml
                     _qchips = "".join(
-                        "<button type='button' class='replacer-lora-chip' data-lora=\"{0}\">+ {0}</button>".format(_qhtml.escape(_qln, quote=True))
-                        for _qln in _qloras)
+                        "<button type='button' class='replacer-lora-chip' data-mode=\"{1}\" data-lora=\"{0}\">+ {0}</button>".format(
+                            _qhtml.escape(_qln, quote=True), _qlm)
+                        for _qln, _qlm in _qloras)
                     gr.HTML("<div class='replacer-lora-chip-row'>" + _qchips + "</div>")
 
                 with gr.Row():

@@ -41,4 +41,48 @@
         ta.value += ' <lora:' + name + ':1>';
         ta.dispatchEvent(new Event('input', { bubbles: true }));
     }, true);
+
+    // Show only the chips for the mode that is CURRENTLY selected.
+    //
+    // The chip HTML is built once, when the server constructs its Blocks, so it
+    // cannot be regenerated on a mode switch -- a page reload just re-serves
+    // the same markup. A server that started in xl therefore offered xl LoRAs
+    // for the rest of its life however many times the user switched to flux.
+    // Every mode's chips are emitted with a data-mode instead, and the live
+    // mode radio decides which are visible; chips at the Lora root carry an
+    // empty data-mode and always show.
+    function currentModeName() {
+        var radio = gradioApp().querySelector('#forge_ui_preset');
+        if (!radio) return null;
+        var inputs = radio.getElementsByTagName('input');
+        for (var i = 0; i < inputs.length; i++) {
+            if (inputs[i].checked) return ['sd', 'xl', 'flux'][i] || null;
+        }
+        return null;
+    }
+
+    function applyLoraChipFilter() {
+        var mode = currentModeName();
+        var chips = gradioApp().querySelectorAll('.replacer-lora-chip');
+        if (!chips.length) return;
+        var shown = 0;
+        chips.forEach(function (chip) {
+            var m = chip.getAttribute('data-mode') || '';
+            var visible = !mode || !m || m === mode;
+            chip.style.display = visible ? '' : 'none';
+            if (visible) shown++;
+        });
+        gradioApp().querySelectorAll('.replacer-lora-mode').forEach(function (el) {
+            el.textContent = mode ? '(' + mode + ' mode, ' + shown + ')' : '';
+        });
+    }
+
+    // re-apply on any mode change, and after gradio remounts the row
+    document.addEventListener('change', function (ev) {
+        if (ev.target && ev.target.closest && ev.target.closest('#forge_ui_preset')) {
+            setTimeout(applyLoraChipFilter, 50);
+        }
+    }, true);
+    if (typeof onAfterUiUpdate === 'function') onAfterUiUpdate(applyLoraChipFilter);
+    else setInterval(applyLoraChipFilter, 2000);
 })();
