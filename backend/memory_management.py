@@ -259,6 +259,17 @@ if args.cudnn_benchmark:
     except Exception as e:
         print(f"Could not enable cuDNN benchmark: {e}")
 
+if args.vram_fraction and is_nvidia():
+    try:
+        fraction = min(1.0, max(0.5, float(args.vram_fraction)))
+        total_mb = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / (1024 * 1024)
+        torch.cuda.set_per_process_memory_fraction(fraction)
+        print(f"VRAM reservation capped at {fraction:.0%} of {total_mb:.0f} MB "
+              f"({total_mb * fraction:.0f} MB) -- over-allocation will raise OOM "
+              f"instead of falling back to system memory (--vram-fraction).")
+    except Exception as e:
+        print(f"Could not set VRAM fraction: {e}")
+
 if args.tf32:
     try:
         # TF32 is an Ampere+ (compute capability >= 8) feature. On older GPUs the

@@ -188,6 +188,16 @@ rem stalled generation's console output was still sitting unflushed in the
 rem buffer while that very stall was being diagnosed, which is precisely when
 rem it is needed and precisely when the process will not exit to flush it.
 set "PYTHONUNBUFFERED=1"
+
+rem Expandable segments let the CUDA caching allocator grow and reuse one
+rem virtual region instead of a pile of fixed-size blocks. Without it a decode
+rem can fail a 256 MB request while holding GIGABYTES of reserved-but-
+rem unusable cache -- observed here as an OOM with 6.92 GB allocated against a
+rem 10.12 GB limit, i.e. not exhaustion but fragmentation. Matters most on a
+rem card too small to hold the model, where weights are streamed in and out
+rem every run and the allocator is churned hardest.
+set "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+
 set "HF_HOME=%FORGE_MODELS_DIR%\hf-cache"
 "%VENV%\Scripts\python.exe" "%~dp0launch.py" --listen --port %FORGE_PORT% --api --cuda-malloc --no-half-vae --disable-xformers --skip-python-version-check --ckpt-dir "%FORGE_MODELS_DIR%\checkpoints\%CKMODE%" --lora-dir "%FORGE_MODELS_DIR%\Lora" --vae-dir "%FORGE_MODELS_DIR%\VAE" --text-encoder-dir "%FORGE_MODELS_DIR%\text_encoder" --esrgan-models-path "%FORGE_MODELS_DIR%\ESRGAN" %AUTOLAUNCH% %EXTRA_ARGS% %FORGE_EXTRA_ARGS%
 

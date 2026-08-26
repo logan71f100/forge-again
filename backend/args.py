@@ -68,6 +68,24 @@ parser.add_argument("--cudnn-benchmark", action="store_true")
 parser.add_argument("--tf32", action="store_true")
 parser.add_argument("--use-sage-attention", action="store_true")
 
+# --vram-fraction  caps how much of the card THIS process may reserve, as a
+#                  fraction of total VRAM. The point is NOT to save memory, it is
+#                  to make over-allocation FAIL LOUDLY. On Windows the driver's
+#                  sysmem fallback quietly serves an oversized allocation out of
+#                  host RAM rather than returning an error, so PyTorch never
+#                  raises, Forge's OOM handlers never fire, and the run looks
+#                  hung while a kernel grinds over PCIe -- 100% GPU "utilisation"
+#                  at ~1% memory bandwidth and well under half the power draw.
+#                  A cap makes PyTorch's own allocator raise OutOfMemoryError
+#                  first, and that IS caught: the VAE retries tiled and the run
+#                  finishes in seconds. cuDNN workspaces (including the autotune
+#                  trials --cudnn-benchmark provokes on an unseen input shape)
+#                  go through the same allocator, so they are covered too.
+#                  Leave headroom for the desktop compositor -- the cap counts
+#                  only this process, while the fallback triggers on the card
+#                  being full. 0 = off.
+parser.add_argument("--vram-fraction", type=float, default=0.0)
+
 parser.add_argument("--disable-gpu-warning", action="store_true")
 
 args = parser.parse_known_args()[0]
