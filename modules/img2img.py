@@ -223,6 +223,24 @@ def img2img_function(id_task: str, request: gr.Request, mode: int, prompt: str, 
     p.scripts = modules.scripts.scripts_img2img
     p.script_args = args
 
+    # A canvas transport failure hands us a fully transparent or flat init
+    # image with no error anywhere -- it flattens to a solid rectangle, the
+    # model paints into that, and the user sees "black output" or "it ignored
+    # my mask" with nothing tying it back to the upload. Say so, up front,
+    # under the result. A deliberately solid init is legal, so this warns
+    # rather than blocks.
+    if image is not None:
+        try:
+            from modules import generation_hints
+            extrema = image.convert('RGB').resize((64, 64)).getextrema()
+            lo = min(channel[0] for channel in extrema)
+            hi = max(channel[1] for channel in extrema)
+            if hi - lo <= 2:
+                generation_hints.add(p, "The source image arrived as a single flat color — the canvas most likely uploaded an empty frame instead of your picture. Re-add the image to the canvas before trusting this result.")
+                print(f"[img2img] WARNING: init image is a flat color (value ~{lo}); the canvas upload was probably empty")
+        except Exception:
+            pass
+
     p.user = request.username
 
     if shared.opts.enable_console_prompts:
