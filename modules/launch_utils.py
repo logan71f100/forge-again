@@ -545,7 +545,14 @@ def prepare_environment():
     # git_clone(stable_diffusion_xl_repo, repo_dir('generative-models'), "Stable Diffusion XL", stable_diffusion_xl_commit_hash)
     # git_clone(k_diffusion_repo, repo_dir('k-diffusion'), "K-diffusion", k_diffusion_commit_hash)
     git_clone(huggingface_guess_repo, repo_dir('huggingface_guess'), "huggingface_guess", huggingface_guess_commit_hash)
-    git_clone(blip_repo, repo_dir('BLIP'), "BLIP", blip_commit_hash)
+    # BLIP is VENDORED in the main repo (no .git inside), carrying the
+    # transformers-5 fixes -- post_init migration, GenerationMixin, head-mask
+    # shim, beam-search double-expansion. Do NOT git_clone it: with the dir
+    # present but not a git repo, git_clone's rev-parse would resolve to the
+    # PARENT repo and try to check out BLIP's commit hash THERE. Only clone
+    # if the vendored copy is somehow missing entirely.
+    if not os.path.exists(os.path.join(repo_dir('BLIP'), 'models', 'blip.py')):
+        git_clone(blip_repo, repo_dir('BLIP'), "BLIP", blip_commit_hash)
 
     startup_timer.record("clone repositores")
 

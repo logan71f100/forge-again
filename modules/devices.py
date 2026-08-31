@@ -95,7 +95,28 @@ class NansException(Exception):
 
 
 def test_for_nans(x, where):
-    return
+    # This was stubbed out during the port, which turned every NaN'd run into
+    # a silent black image. Restored 2026-08-29 after chasing exactly that: a
+    # completed 14/14 run under heavy partial-offload delivering pure black
+    # with a clean console. Cheap check (first element only -- the all-NaN
+    # collapse this exists to catch makes every element NaN).
+    from modules import shared
+    if getattr(shared.opts, 'disable_nan_check', False):
+        return
+    if not torch.isnan(x[(0,) * len(x.shape)]):
+        return
+    if where == "unet":
+        message = ("A tensor with all NaNs was produced in the UNet -- the image would have "
+                   "come out solid black. On this setup the usual cause is arithmetic "
+                   "degrading under heavy memory pressure (deep CPU-swap of the model "
+                   "weights); free VRAM -- close other GPU apps, stop the assistant LLM, or "
+                   "lower resolution -- and retry.")
+    elif where == "vae":
+        message = ("A tensor with all NaNs was produced in the VAE -- the image would have "
+                   "come out solid black. Free VRAM and retry.")
+    else:
+        message = f"A tensor with all NaNs was produced in {where}."
+    raise NansException(message)
 
 
 def first_time_calculation():

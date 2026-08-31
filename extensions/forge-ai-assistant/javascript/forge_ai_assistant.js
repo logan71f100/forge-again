@@ -1505,6 +1505,10 @@
             match: 'juggernautxl',
             notes: 'Juggernaut XL (SDXL). DPM++ 2M SDE, 30-40 steps, CFG 3-6 (author: "less is more realistic"), no clip skip, 832x1216 portrait. Natural language; booru tags also work. Author: start with NO negative, add only what you actually see and don\'t want. Hires: denoise 0.3, 1.5x. Weak at text and distant faces.'
         },
+        {
+            match: 'chroma',
+            notes: 'Chroma (de-distilled flux-schnell derivative; T5 only, REAL CFG). TWO REGIMES - check the prompt for a flash/speed LoRA tag (e.g. chroma-flash-heun) BEFORE touching settings. WITH the flash LoRA at 1.0: CFG must be exactly 1, the negative prompt is completely IGNORED (do not edit it, do NOT raise CFG to fix anything), Heun+Simple 8-16 steps or Euler 16-24. WITHOUT it: CFG ~4 (CFG 1 = out-of-focus mush), Beta scheduler, ~26 steps, DPM++ 2M or Euler, and a REAL negative prompt is REQUIRED (empty negative degrades badly - e.g. "blurry, motion blur, low quality, painting, watermark"). ALWAYS: the Distilled CFG slider is INERT for chroma (no guidance embedding) - never adjust it. Prompt in long natural-language sentences; tag lists work poorly and Pony score_9/score_8_up tags are meaningless - remove rather than add. Action verbs invite motion blur (counter: "frozen action, fast shutter speed"). Fine skin-detail tokens (freckles) become leopard-spot artifacts when the face is small in frame - close-ups only. Stay near 1MP (1024x1024, 896x1152).'
+        },
     ];
 
     // User-defined per-checkpoint notes from Settings > AI Assistant (JSON array

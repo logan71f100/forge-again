@@ -259,6 +259,23 @@ class IntegratedChromaTransformer2DModel(nn.Module):
         modulation_index = modulation_index.unsqueeze(0).repeat(img.shape[0], 1, 1)
         timestep_guidance = torch.cat([distill_timestep, distil_guidance], dim=1).unsqueeze(1).repeat(1, mod_index_length, 1)
         input_vec = torch.cat([timestep_guidance, modulation_index], dim=-1)
+        # Under memory pressure the partial offloader may park this module on
+        # CPU -- but unlike the double/single blocks it is not part of the
+        # blocked-swap machinery, so nothing brings it back, and its RMSNorm
+        # touches the raw parameter (no manual-cast path): the run dies
+        # mid-sampling with "Expected all tensors to be on the same device".
+        # Caught live 2026-08-29: an [Unload] fired at step 6/14 while VRAM
+        # was tight and the next step crashed here. The module runs EVERY
+        # step, so offloading it is never a saving worth having -- if it is
+        # not where the activations are, move it there (a few hundred MB,
+        # once) before use.
+        try:
+            approx_device = next(self.distilled_guidance_layer.parameters()).device
+        except StopIteration:
+            approx_device = device
+        if approx_device != device:
+            print(f"[chroma] distilled_guidance_layer was parked on {approx_device}; moving to {device} (partial-offload under memory pressure)")
+            self.distilled_guidance_layer.to(device)
         mod_vectors = self.distilled_guidance_layer(input_vec)
         mod_vectors_dict = self.distribute_modulations(mod_vectors, nb_single_block, nb_double_block)
         

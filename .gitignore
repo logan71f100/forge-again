@@ -14,7 +14,12 @@ __pycache__
 /outputs/
 /ESRGAN/*
 /SwinIR/*
-/repositories
+# repositories/ holds launch-time clones -- EXCEPT BLIP, which is vendored
+# (transformers-5 fixes live in it; a fresh clone would reintroduce the
+# breakage). Ignoring the directory itself would make the child unreachable,
+# hence the /* + ! pair.
+/repositories/*
+!/repositories/BLIP/
 /venv
 /tmp
 /output
