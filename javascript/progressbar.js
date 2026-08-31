@@ -253,6 +253,7 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
     var previewFailures = 0;
     var MAX_POLL_FAILURES = 5;
     var stopped = false;
+    var lastPollTick = Date.now();  // fed by every poll response; the sentinel watches it
 
     var removeProgressBar = function() {
         releaseWakeLock();
@@ -290,6 +291,7 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
     var funProgress = function(id_task) {
         requestWakeLock();
         request("./internal/progress", {id_task: id_task, live_preview: false}, function(res) {
+            lastPollTick = Date.now();
             if (res.completed) {
                 removeProgressBar();
                 return;
@@ -391,6 +393,7 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 if (!stopped) funProgress(id_task, res.id_live_preview);
             }, opts.live_preview_refresh_period || 500);
         }, function() {
+            lastPollTick = Date.now();
             if (!stopped && ++progressFailures < MAX_POLL_FAILURES) {
                 forgeTimer.setTimeout(() => {
                     if (!stopped) funProgress(id_task);
@@ -451,5 +454,47 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
     if (gallery) {
         funLivePreview(id_task, 0);
     }
+
+    // Sentinel: the poll chain above is a relay -- each response schedules the
+    // next request -- so a single dropped baton (an exception in a callback, a
+    // fetch that neither resolves nor rejects) kills BOTH live updates and the
+    // end-of-run teardown, leaving a zombie bar frozen at its last percentage
+    // while the run finishes fine via the queue stream. Seen twice in one day
+    // ("progress stuck at 13% with nothing generating"). This independent
+    // Worker-paced loop watches the chain's heartbeat (lastPollTick); if it
+    // goes silent it probes the task directly, tears down if the task is gone,
+    // and RESTARTS the chain if the task is still alive. Every finding is
+    // pushed to the forensic ring so client-debug.log convicts the next death.
+    var SENTINEL_MS = 15000;
+    var SILENT_MS = 25000;
+    var slog = function(msg) {
+        try {
+            (window.faStreamLog = window.faStreamLog || []).push(new Date().toISOString() + ' ' + msg);
+        } catch (e) { /* forensics unavailable */ }
+        console.warn('[progress-sentinel] ' + msg);
+    };
+    var sentinelCheck = function() {
+        if (stopped) return;
+        var silent = Date.now() - lastPollTick;
+        if (silent > SILENT_MS) {
+            slog('poll chain silent ' + Math.round(silent / 1000) + 's for ' + id_task + ' -- probing task directly');
+            request("./internal/progress", {id_task: id_task, live_preview: false}, function(res) {
+                if (stopped) return;
+                lastPollTick = Date.now();
+                if (res.completed || (!res.active && !res.queued)) {
+                    slog('task ' + id_task + ' is over (completed=' + res.completed + '); tearing down the zombie bar');
+                    removeProgressBar();
+                    return;
+                }
+                slog('task ' + id_task + ' still alive -- restarting the dead poll chain');
+                progressFailures = 0;
+                funProgress(id_task);
+            }, function() {
+                // server unreachable: the connection watchdog owns that case
+            });
+        }
+        if (!stopped) forgeTimer.setTimeout(sentinelCheck, SENTINEL_MS);
+    };
+    forgeTimer.setTimeout(sentinelCheck, SENTINEL_MS);
 
 }
