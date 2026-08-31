@@ -159,13 +159,25 @@ class InterrogateModels:
         return model, preprocess
 
     def load(self):
+        # The models and their patchers are keyed SEPARATELY: SUPIR's boot
+        # pre-warm assigns interrogator.blip_model directly (so captions are
+        # fast), and keying the patcher on the model then skipped its creation
+        # entirely -- load_models_gpu received None and interrogate died with
+        # "'NoneType' object has no attribute 'load_device'". The .to() also
+        # has to run for a pre-populated model, which arrives on whatever
+        # device and dtype the pre-warmer left it in; .to() is a no-op when
+        # nothing needs changing.
         if self.blip_model is None:
             self.blip_model = self.load_blip_model()
+
+        if self.blip_patcher is None:
             self.blip_model = self.blip_model.to(device=self.offload_device, dtype=self.dtype)
             self.blip_patcher = ModelPatcher(self.blip_model, load_device=self.load_device, offload_device=self.offload_device)
 
         if self.clip_model is None:
             self.clip_model, self.clip_preprocess = self.load_clip_model()
+
+        if self.clip_patcher is None:
             self.clip_model = self.clip_model.to(device=self.offload_device, dtype=self.dtype)
             self.clip_patcher = ModelPatcher(self.clip_model, load_device=self.load_device, offload_device=self.offload_device)
 
