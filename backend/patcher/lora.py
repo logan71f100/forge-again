@@ -25,7 +25,11 @@ def inner_str(k, prefix="", suffix=""):
     return k[len(prefix):-len(suffix)]
 
 
-def model_lora_keys_clip(model, key_map={}):
+def model_lora_keys_clip(model, key_map=None):
+    # key_map used to be a MUTABLE DEFAULT, so every mapping ever generated
+    # leaked into every later call -- switch checkpoints and the map still
+    # carried the previous architecture's entries. Fresh dict per call.
+    key_map = {} if key_map is None else key_map
     model_keys, key_maps = get_function('model_lora_keys_clip')(model, key_map)
 
     for model_key in model_keys:
@@ -37,10 +41,36 @@ def model_lora_keys_clip(model, key_map={}):
                     formatted = f"lora_{prefix}_{formatted}"
                     key_map[formatted] = model_key
 
+    # transformers 5 FLATTENED CLIPTextModel: layer weights moved from
+    # 'text_model.encoder.layers...' to 'encoder.layers...' (verified against
+    # this venv: 5.14.1 emits encoder.layers.0.self_attn.q_proj.weight). The
+    # vendored builder above still probes the OLD path, so the CLIP map came
+    # out essentially empty for SD1/SDXL, every kohya lora_te* key went
+    # unmatched, and the >12-orphans gate then threw away the ENTIRE LoRA --
+    # working UNet weights included -- behind a one-line "version mismatch".
+    # Every SDXL LoRA was silently a no-op. LoRA files name these tensors by
+    # the OLD layout forever ('lora_te1_text_model_encoder_layers_...'), so
+    # map that canonical name onto whichever layout the runtime model has.
+    # te1=clip_l, te2=clip_g, plus the un-numbered lora_te_ alias SD1.5-era
+    # files use.
+    for model_key in model_keys:
+        if not model_key.endswith(".weight"):
+            continue
+        for attr, te in (("clip_l.transformer.", "te1"), ("clip_g.transformer.", "te2"), ("clip_h.transformer.", "te1")):
+            for marker in ("text_model.encoder.layers.", "encoder.layers."):
+                full = attr + marker
+                if model_key.startswith(full):
+                    rest = model_key[len(full):-len(".weight")]  # e.g. '0.self_attn.q_proj'
+                    flat = ("text_model.encoder.layers." + rest).replace(".", "_")
+                    key_map[f"lora_{te}_{flat}"] = model_key
+                    key_map[f"lora_te_{flat}"] = model_key
+                    break
+
     return key_maps
 
 
-def model_lora_keys_unet(model, key_map={}):
+def model_lora_keys_unet(model, key_map=None):
+    key_map = {} if key_map is None else key_map  # same mutable-default leak as above
     model_keys, key_maps = get_function('model_lora_keys_unet')(model, key_map)
 
     # TODO: OFT

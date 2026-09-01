@@ -23,7 +23,16 @@ def load_lora_for_models(model, clip, lora, strength_model, strength_clip, filen
     lora_clip, lora_unmatch = load_lora(lora_unmatch, clip_keys)
 
     if len(lora_unmatch) > 12:
+        # A dropped LoRA still generates -- and the infotext still lists its
+        # hash -- so this one line was the ONLY trace, and it does not say
+        # what mismatched. Say enough to diagnose from the console alone:
+        # what the file offers vs what the model expected.
         print(f'[LORA] LoRA version mismatch for {model_flag}: {filename}')
+        print(f'[LORA]   {len(lora_unmatch)} of {len(lora)} lora keys matched nothing; '
+              f'unet map has {len(unet_keys)} entries, clip map {len(clip_keys)}')
+        print(f'[LORA]   sample lora keys    : {sorted(lora_unmatch)[:3]}')
+        print(f'[LORA]   sample unet targets : {sorted(unet_keys)[:3]}')
+        print(f'[LORA]   sample clip targets : {sorted(clip_keys)[:3]}')
         return model, clip
 
     if len(lora_unmatch) > 0:
