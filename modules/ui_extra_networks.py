@@ -772,8 +772,13 @@ def create_ui(interface: gr.Blocks, unrelated_tabs, tabname):
 
             related_tabs.append(tab)
 
-    ui.button_save_preview = gr.Button('Save preview', elem_id=f"{tabname}_save_preview", visible=False)
-    ui.preview_target_filename = gr.Textbox('Preview save filename', elem_id=f"{tabname}_preview_filename", visible=False)
+    # visible=False components do not MOUNT under gradio 6, so the JS that
+    # dispatches clicks onto these bridge elements found nothing and the
+    # feature silently did nothing (the visible Refresh icon "worked" without
+    # ever refreshing). Mount them always and hide via CSS instead
+    # (.webui-hidden-mounted -- the established g6 pattern for JS bridges).
+    ui.button_save_preview = gr.Button('Save preview', elem_id=f"{tabname}_save_preview", visible=True, elem_classes=['webui-hidden-mounted'])
+    ui.preview_target_filename = gr.Textbox('Preview save filename', elem_id=f"{tabname}_preview_filename", visible=True, elem_classes=['webui-hidden-mounted'])
 
     for tab in unrelated_tabs:
         tab.select(fn=None, _js=f"function(){{extraNetworksUnrelatedTabSelected('{tabname}');}}", inputs=[], outputs=[], show_progress=False)
@@ -787,13 +792,25 @@ def create_ui(interface: gr.Blocks, unrelated_tabs, tabname):
         )
         tab.select(fn=None, _js=jscode, inputs=[], outputs=[], show_progress=False)
 
+        # Deliver the card grids on tab select as well as page load. The
+        # interface.load below fires once, at page load, into components that
+        # a lazily-built parent tab (img2img) has NOT MOUNTED yet -- the
+        # delivery lands nowhere, and the first open of that Lora tab shows
+        # the "loading" placeholder forever until switching away and back
+        # remounts the pane. Selecting the tab is the one moment the pane is
+        # guaranteed to be wanted, so hand it the content then; pages_html
+        # caches, so this is a dict lookup after the first call.
+        tab.select(fn=lambda: pages_html(), inputs=[], outputs=ui.pages, queue=False, show_progress=False)
+
         def refresh():
             for pg in ui.stored_extra_pages:
                 pg.refresh()
             create_html()
             return ui.pages_contents
 
-        button_refresh = gr.Button("Refresh", elem_id=f"{tabname}_{page.extra_networks_tabname}_extra_refresh_internal", visible=False)
+        # visible=True + CSS-hidden: see the save_preview comment above --
+        # an unmounted (visible=False) button cannot receive the JS click.
+        button_refresh = gr.Button("Refresh", elem_id=f"{tabname}_{page.extra_networks_tabname}_extra_refresh_internal", visible=True, elem_classes=['webui-hidden-mounted'])
         # queue=False: refresh is a disk read; queued it would hang behind an
         # active generation (spinner until the run ends)
         button_refresh.click(fn=refresh, inputs=[], outputs=ui.pages, queue=False).then(fn=lambda: None, _js="function(){ " + f"applyExtraNetworkFilter('{tabname}_{page.extra_networks_tabname}');" + " }").then(fn=lambda: None, _js='setupAllResizeHandles')

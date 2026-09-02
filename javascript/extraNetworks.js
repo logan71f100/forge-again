@@ -581,7 +581,14 @@ function extraNetworksControlRefreshOnClick(event, tabname, extra_networks_tabna
      * @param extra_networks_tabname    The id of the active extraNetworks tab. Ex: lora, checkpoints, etc.
      */
     var btn_refresh_internal = gradioApp().getElementById(tabname + "_" + extra_networks_tabname + "_extra_refresh_internal");
-    btn_refresh_internal.dispatchEvent(new Event("click"));
+    if (!btn_refresh_internal) {
+        console.error('[extra-networks] internal refresh button not mounted for ' + tabname + '_' + extra_networks_tabname);
+        return;
+    }
+    // .click(), NOT dispatchEvent(new Event("click")): Svelte 5's listener does
+    // not fire for a bare synthetic Event, so the refresh silently did nothing
+    // (verified live -- dispatch: no rescan; .click(): new file's card appears).
+    btn_refresh_internal.click();
 }
 
 var globalPopup = null;
