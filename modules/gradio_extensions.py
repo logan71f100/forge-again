@@ -139,6 +139,32 @@ def Dropdown_preprocess(self, payload):
         self.allow_custom_value = prev
 
 
+def _install_choices_normalizer(cls):
+    # gradio 6 normalizes `choices` to (label, value) tuples in __init__ ONLY.
+    # A runtime gr.update(choices=[...]) is applied with a bare setattr, so a
+    # plain list of strings lands as-is -- and the next preprocess, which does
+    # `[value for _, value in self.choices]`, dies with "too many values to
+    # unpack (expected 2)". Every dropdown that refreshes its list at runtime
+    # was a landmine: styles, checkpoint refresh, VAE/module lists, ControlNet
+    # model filtering. Reproduced offline: init -> tuples, update -> strings,
+    # preprocess -> ValueError. Normalize on EVERY assignment instead, so the
+    # update path can no longer produce a shape the read path cannot consume.
+    def _get(self):
+        return self.__dict__.get('_choices', [])
+
+    def _set(self, choices):
+        self.__dict__['_choices'] = (
+            [tuple(c) if isinstance(c, (tuple, list)) else (str(c), c) for c in choices]
+            if choices else []
+        )
+
+    cls.choices = property(_get, _set)
+
+
+for _cls in (gr.components.dropdown.Dropdown, gr.components.radio.Radio, gr.components.checkboxgroup.CheckboxGroup):
+    _install_choices_normalizer(_cls)
+
+
 original_IOComponent_init = patches.patch(__name__, obj=gr.components.Component, field="__init__", replacement=IOComponent_init)
 original_Block_get_config = patches.patch(__name__, obj=gr.blocks.Block, field="get_config", replacement=Block_get_config)
 original_BlockContext_init = patches.patch(__name__, obj=gr.blocks.BlockContext, field="__init__", replacement=BlockContext_init)
