@@ -3601,8 +3601,19 @@
             const t = ev.target;
             if (!t || !t.closest) return;
             const isGenerate = !!t.closest('button[id$="_generate"]');
-            const btn = t.closest('button, [role=tab]');
-            const isTab = !!btn && !!btn.closest('.tab-nav, .tab-wrapper, .tabs');
+            // Only the TOP-LEVEL tab strip counts as "leaving". The previous
+            // test -- any button with a `.tabs` ancestor -- was true for every
+            // button on the page (the whole UI sits inside #tabs), so a full
+            // multi-tab capture ran on each accordion header, each icon
+            // button, each ⟳: measured 25-50 ms of scanControls per click,
+            // and twice, because the handler was also registered on
+            // gradioApp(), which IS document under gradio 6.
+            let isTab = false;
+            if (!isGenerate) {
+                const btn = t.closest('[role=tab], .tab-nav > button');
+                const top = gradioApp().getElementById('tabs');
+                isTab = !!btn && !!top && btn.closest('.tabs, #tabs') === top;
+            }
             if (!isGenerate && !isTab) return;
             try {
                 captureUiSnapshot(true);   // force: bypasses the `busy` guard
@@ -3610,7 +3621,6 @@
                 autosaveSession();
             } catch (e) { /* never block the click */ }
         };
-        gradioApp().addEventListener('click', captureBeforeLeaving, true);
         document.addEventListener('click', captureBeforeLeaving, true);
         setInterval(() => {
             if (!uiDirty || document.hidden || busy || uiRestoring) return;

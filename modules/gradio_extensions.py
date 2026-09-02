@@ -10,6 +10,11 @@ import gradio.component_meta
 
 
 from modules import scripts, ui_tempdir, patches
+from modules import gradio_frontend_patches
+
+# the prebuilt JS bundle has its own hot path that no Python-side setting
+# reaches (see the module docstring); patched on disk before the UI is served
+gradio_frontend_patches.apply()
 
 
 class GradioDeprecationWarning(DeprecationWarning):
