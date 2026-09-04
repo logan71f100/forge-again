@@ -193,6 +193,20 @@ class VAE:
                           f"{_mb(_alloc0):.0f} MB resident, {_mb(free_memory):.0f} MB was free")
         except memory_management.OOM_EXCEPTION as e:
             print("Warning: Ran out of memory when regular VAE decoding, retrying with tiled VAE decoding.")
+            # Give the retry somewhere to work. The failed attempt leaves its
+            # fragmented cache behind, and the diffusion model is still resident
+            # -- a decode deliberately does NOT evict it (see the request cap
+            # above) -- so the tiled path, which exists for exactly this case,
+            # was retrying inside the same exhausted allocator and OOMing on a
+            # 256 MB tile. By the time a decode runs sampling is over and those
+            # weights are dead space: the cost of dropping them is one reload on
+            # the next run, against a generation that otherwise fails outright
+            # AND hands the next run an allocator with ~1 GB free -- which on
+            # Windows means silent sysmem fallback and a run that looks hung
+            # (measured 2026-09-04: 20 steps at 1304x2048, 8-hour ETA, 0%).
+            memory_management.free_memory(0, self.device, free_all=True)
+            memory_management.soft_empty_cache(force=True)
+            memory_management.load_models_gpu([self.patcher], memory_required=0)
             pixel_samples = self.decode_tiled_(samples_in)
 
         pixel_samples = pixel_samples.to(self.output_device).movedim(1, -1)
@@ -230,6 +244,11 @@ class VAE:
 
         except memory_management.OOM_EXCEPTION as e:
             print("Warning: Ran out of memory when regular VAE encoding, retrying with tiled VAE encoding.")
+            # Same as the decode fallback above: free the room the retry needs
+            # before asking it to do the same work in smaller pieces.
+            memory_management.free_memory(0, self.device, free_all=True)
+            memory_management.soft_empty_cache(force=True)
+            memory_management.load_models_gpu([self.patcher], memory_required=0)
             samples = self.encode_tiled_(pixel_samples)
 
         return samples
