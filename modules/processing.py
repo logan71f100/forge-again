@@ -902,16 +902,21 @@ def _resident_weights_mb():
     return 0
 
 
+def is_stale_inference_tensor_error(e: BaseException) -> bool:
+    """Did this exception come from an earlier abort leaving inference-mode tensors behind?
+
+    Interrupting mid-sampling can leave weights as tensors created inside
+    torch.inference_mode(), which the next run then refuses to touch
+    ("Inference tensors do not track version counter", and siblings). torch
+    raises a plain RuntimeError for all of them, so the message is the only
+    thing to match on -- but "inference tensor" is specific enough that
+    nothing else in a generation says it.
+    """
+    return 'inference tensor' in str(e).lower()
+
+
 def manage_model_and_prompt_cache(p: StableDiffusionProcessing):
     global need_global_unload
-
-    # A previous generation was interrupted: force a full, clean reload of the
-    # current checkpoint so this run doesn't inherit inference-mode tensors the
-    # abort left in a bad state (the "Inference tensors do not track version
-    # counter" error). Only fires right after an interrupt — no cost otherwise.
-    if getattr(shared.state, 'reload_next_generation', False):
-        shared.state.reload_next_generation = False
-        sd_models.model_data.forge_hash = ''   # invalidate so forge_model_reload does a real reload
 
     p.sd_model, just_reloaded = forge_model_reload()
 
@@ -966,22 +971,44 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
                                     f'reserve was capped. If this run fails or is very slow, reduce the resolution or '
                                     f'batch size, or use a smaller/more quantized checkpoint.')
 
-        # load/reload model and manage prompt cache as needed
-        if getattr(p, 'txt2img_upscale', False):
-            # avoid model load from hiresfix quickbutton, as it could be redundant
-            pass
-        else:
-            manage_model_and_prompt_cache(p)
-
-        # backwards compatibility, fix sampler and scheduler if invalid
-        sd_samplers.fix_p_invalid_sampler_and_scheduler(p)
-
         import torch
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
 
-        with profiling.Profiler():
-            res = process_images_inner(p)
+        def run_generation():
+            # load/reload model and manage prompt cache as needed
+            if getattr(p, 'txt2img_upscale', False):
+                # avoid model load from hiresfix quickbutton, as it could be redundant
+                pass
+            else:
+                manage_model_and_prompt_cache(p)
+
+            # backwards compatibility, fix sampler and scheduler if invalid
+            sd_samplers.fix_p_invalid_sampler_and_scheduler(p)
+
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+
+            with profiling.Profiler():
+                return process_images_inner(p)
+
+        try:
+            res = run_generation()
+        except RuntimeError as e:
+            # An aborted run can leave the weights as inference-mode tensors that
+            # this run is then not allowed to touch. Recover by reloading the
+            # checkpoint and running once more, rather than pre-emptively
+            # reloading after EVERY interrupt: cancelling a generation is a
+            # normal part of the workflow here (pause on first preview, cancel,
+            # adjust, go again), and paying ~7s of reload + weight moves on each
+            # one was costing far more, far more often, than the error it was
+            # insuring against.
+            if not is_stale_inference_tensor_error(e):
+                raise
+            print('[Model] The previous generation left stale inference tensors behind '
+                  '-- reloading the checkpoint and retrying this run once.')
+            sd_models.model_data.forge_hash = ''   # invalidate so forge_model_reload does a real reload
+            shared.state.interrupted = False
+            shared.state.skipped = False
+            res = run_generation()
 
         # Feedback for tuning the reserve estimate: how much VRAM this run
         # ACTUALLY peaked at vs what was budgeted. If peak stays well under

@@ -41,10 +41,6 @@ class State:
 
     def __init__(self):
         self.server_start = time.time()
-        # Set by interrupt(): forces a clean model reload before the NEXT generation
-        # so it can't inherit inference-mode tensors left in a bad state by the abort.
-        # Deliberately NOT reset in begin() — it must survive into the next job.
-        self.reload_next_generation = False
         if args.cuda_stream:
             self.vae_stream = torch.cuda.Stream()
         else:
@@ -95,10 +91,6 @@ class State:
 
     def interrupt(self):
         self.interrupted = True
-        # Interrupting mid-sampling can leave inference-mode tensors in a state the
-        # next generation chokes on ("Inference tensors do not track version counter").
-        # Flag a clean model reload before the next run to clear it.
-        self.reload_next_generation = True
         log.info("Received interrupt request")
 
     def stop_generating(self):
