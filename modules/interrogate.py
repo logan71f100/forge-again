@@ -135,15 +135,45 @@ class InterrogateModels:
 
         import models.blip
 
+        # BLIP ships two captioners. The original code hardwired the base one,
+        # whose captions are short and confidently wrong often enough to make
+        # the feature hard to trust -- and raising min_length on it only makes
+        # it pad a weak guess out into a longer weak guess. The large model
+        # (ViT-L/16, 24 layers) is the same pipeline with a much stronger
+        # vision tower, so it is the one real quality lever here.
+        variant = getattr(shared.opts, 'interrogate_blip_variant', 'large')
+        if variant == 'base':
+            download_name = 'model_base_caption_capfilt_large.pth'
+            vit = 'base'
+        else:
+            download_name = 'model_large_caption.pth'
+            vit = 'large'
+        model_dir = os.path.join(paths.models_path, "BLIP")
+
         files = modelloader.load_models(
-            model_path=os.path.join(paths.models_path, "BLIP"),
-            model_url='https://storage.googleapis.com/sfr-vision-language-research/BLIP/models/model_base_caption_capfilt_large.pth',
+            model_path=model_dir,
+            model_url=f'https://storage.googleapis.com/sfr-vision-language-research/BLIP/models/{download_name}',
             ext_filter=[".pth"],
-            download_name='model_base_caption_capfilt_large.pth',
+            download_name=download_name,
         )
 
-        blip_model = models.blip.blip_decoder(pretrained=files[0], image_size=blip_image_eval_size, vit='base', med_config=os.path.join(paths.paths["BLIP"], "configs", "med_config.json"))
+        # load_models returns EVERY .pth in the directory, so once both
+        # captioners are present, files[0] is whichever sorted first -- taking
+        # it would silently load base while the setting says large (and blow up
+        # on the 768-vs-1024 vision width). Pick the requested file by name.
+        wanted = os.path.join(model_dir, download_name)
+        path = next((f for f in files if os.path.normcase(os.path.basename(f)) == os.path.normcase(download_name)), None)
+        if path is None:
+            path = wanted if os.path.exists(wanted) else files[0]
+
+        print(f'[Interrogate] Loading BLIP caption model: {os.path.basename(path)} (vit={vit})')
+        blip_model = models.blip.blip_decoder(pretrained=path, image_size=blip_image_eval_size, vit=vit, med_config=os.path.join(paths.paths["BLIP"], "configs", "med_config.json"))
         blip_model.eval()
+
+        # Stamped here rather than at the call site so that EVERY route which
+        # loads a captioner records which one it got -- including SUPIR's boot
+        # pre-warm, which assigns interrogator.blip_model directly.
+        self.blip_variant_loaded = variant
 
         return blip_model
 
@@ -167,8 +197,31 @@ class InterrogateModels:
         # has to run for a pre-populated model, which arrives on whatever
         # device and dtype the pre-warmer left it in; .to() is a no-op when
         # nothing needs changing.
+        # Switching the BLIP variant has to drop the cached model, or the
+        # setting silently does nothing: the first captioner loaded stays for
+        # the life of the process and every later "change" returns byte-identical
+        # captions (how this was caught -- base and large scoring the same on
+        # three test images to the character). load_blip_model() stamps
+        # blip_variant_loaded itself, so a model handed to us by SUPIR's
+        # pre-warm carries its variant too and is not needlessly reloaded.
+        variant = getattr(shared.opts, 'interrogate_blip_variant', 'large')
+        if self.blip_model is not None and getattr(self, 'blip_variant_loaded', variant) != variant:
+            self.blip_model = None
+            self.blip_patcher = None
+
         if self.blip_model is None:
             self.blip_model = self.load_blip_model()
+
+        # Check the DTYPE, not just whether a patcher exists. SUPIR's boot
+        # pre-warm (scripts/supir.py) assigns the model straight from
+        # load_blip_model() without converting it, so it can arrive as fp32
+        # while the image tensor below is built as self.dtype -- which surfaces
+        # as "Input type (struct c10::Half) and bias type (float) should be the
+        # same" from the first conv, well away from the actual cause. .to() is a
+        # no-op when nothing needs changing, and returns the same module object,
+        # so an existing patcher stays valid across the conversion.
+        if next(self.blip_model.parameters()).dtype != self.dtype:
+            self.blip_model = self.blip_model.to(device=self.offload_device, dtype=self.dtype)
 
         if self.blip_patcher is None:
             self.blip_model = self.blip_model.to(device=self.offload_device, dtype=self.dtype)
@@ -221,8 +274,22 @@ class InterrogateModels:
             transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
         ])(pil_image).unsqueeze(0).type(self.dtype).to(self.load_device)
 
+        # int() on ALL THREE. These are gr.Slider settings, so they come back as
+        # floats (96.0), and transformers 5 beam search does
+        #   torch.full(size=(..., max_length), ...)
+        # which rejects a float outright:
+        #   TypeError: full(): argument 'size' failed to unpack the object at
+        #   pos 3 with error "type must be tuple of ints, but got float"
+        # num_beams and min_length were already cast; max_length was not, so the
+        # button died for anyone whose config had ever been written by the
+        # settings UI or the options API.
         with torch.no_grad():
-            caption = self.blip_model.generate(gpu_image, sample=False, num_beams=int(shared.opts.interrogate_clip_num_beams), min_length=int(shared.opts.interrogate_clip_min_length), max_length=shared.opts.interrogate_clip_max_length)
+            caption = self.blip_model.generate(
+                gpu_image, sample=False,
+                num_beams=int(shared.opts.interrogate_clip_num_beams),
+                min_length=int(shared.opts.interrogate_clip_min_length),
+                max_length=int(shared.opts.interrogate_clip_max_length),
+            )
 
         return caption[0]
 

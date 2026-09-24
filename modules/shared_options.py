@@ -266,6 +266,7 @@ options_templates.update(options_section(('compatibility', "Compatibility", "sd"
 options_templates.update(options_section(('interrogate', "Interrogate"), {
     "interrogate_keep_models_in_memory": OptionInfo(False, "Keep models in VRAM"),
     "interrogate_return_ranks": OptionInfo(False, "Include ranks of model tags matches in results.").info("booru only"),
+    "interrogate_blip_variant": OptionInfo("base", "BLIP: caption model", gr.Radio, {"choices": ["base", "large"]}).info("base is the 900 MB original; large is BLIP's ViT-L captioner (1.8 GB, downloaded on first use) -- measured no clear accuracy win on test images, so try it on your own content before keeping it"),
     "interrogate_clip_num_beams": OptionInfo(1, "BLIP: num_beams", gr.Slider, {"minimum": 1, "maximum": 16, "step": 1}),
     "interrogate_clip_min_length": OptionInfo(24, "BLIP: minimum description length", gr.Slider, {"minimum": 1, "maximum": 128, "step": 1}),
     "interrogate_clip_max_length": OptionInfo(48, "BLIP: maximum description length", gr.Slider, {"minimum": 1, "maximum": 256, "step": 1}),
