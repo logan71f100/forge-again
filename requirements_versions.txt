@@ -30,7 +30,7 @@ protobuf==3.20.3   # security: clears CVE-2022-1941; capped <4 by open-clip-torc
 # (so protobuf 3.20.3 satisfies it), has cp312 wheels and numpy-2 support. With
 # it already installed, the extensions' unpinned `onnxruntime` is satisfied and
 # never upgrades, so protobuf is no longer disturbed.
-onnxruntime==1.19.2
+onnxruntime==1.30.0
 psutil>=5.9.5
 pytorch_lightning==1.9.4
 resize-right==0.0.2
