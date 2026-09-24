@@ -55,5 +55,5 @@ gradio_imageslider==0.0.20
 loadimg==0.1.2
 tqdm>=4.66.1
 peft==0.19.1
-pydantic==2.8.2
+pydantic==2.13.5
 huggingface-hub>=1.5,<2.0   # gradio 6 needs >=1.2, transformers 5 needs >=1.5
