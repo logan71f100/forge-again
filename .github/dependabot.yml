@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  # Only OUR dependency list is worth updating. /repositories holds vendored
+  # third-party source (BLIP), which is pinned to whatever the vendored code
+  # was written against and is never pip-installed from -- version PRs against
+  # it are pure noise, and its stale transformers pin was generating security
+  # alerts for a manifest nothing reads.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    # Torch and its companions are pinned to a specific CUDA build and are
+    # upgraded deliberately, together, after testing on the target GPU -- not
+    # by a bot one package at a time.
+    ignore:
+      - dependency-name: "torch"
+      - dependency-name: "torchvision"
+      - dependency-name: "torchaudio"
+      - dependency-name: "xformers"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
