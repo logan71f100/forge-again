@@ -70,6 +70,31 @@ def get_ancestral_step(sigma_from, sigma_to, eta=1.):
     return sigma_down, sigma_up
 
 
+def get_ancestral_step_rf(sigma_from, sigma_to, eta=1.):
+    """Ancestral split for rectified flow, where x_t = (1 - t) * x0 + t * noise.
+
+    get_ancestral_step assumes x_t = x0 + sigma * noise. Used on a flow model
+    it adds noise without shrinking the signal by (1 - sigma), so every step
+    drifts the latent off-scale -- the dark, noisy output Res Multistep
+    Ancestral gave on Chroma. (The deterministic part needs no change: for
+    rectified flow dx/dsigma = (x - x0) / sigma, the same ODE as the
+    variance-exploding form, which is why plain Res Multistep was fine.)
+
+    Returns (sigma_down, alpha_ratio, renoise): step deterministically to
+    sigma_down, then x = alpha_ratio * x + renoise * noise lands exactly on
+    sigma_to. The split is ComfyUI's sample_euler_ancestral_RF.
+    """
+    if not eta or sigma_to == 0:
+        return sigma_to, 1., 0.
+    downstep_ratio = 1 + (sigma_to / sigma_from - 1) * eta
+    sigma_down = sigma_to * downstep_ratio
+    alpha_to = 1 - sigma_to
+    alpha_down = 1 - sigma_down
+    renoise_sq = sigma_to ** 2 - sigma_down ** 2 * alpha_to ** 2 / alpha_down ** 2
+    renoise_sq = renoise_sq.clamp(min=0) if torch.is_tensor(renoise_sq) else max(renoise_sq, 0.)
+    return sigma_down, alpha_to / alpha_down, renoise_sq ** 0.5
+
+
 def is_rectified_flow(model):
     """True for flow-matching models (Flux, Chroma, SD3-style), whose sigma is
     the interpolation time t in (0, 1] rather than a Karras noise level."""
@@ -125,10 +150,15 @@ def res_multistep(model, x, sigmas, extra_args=None, callback=None, disable=None
 
     old_sigma_down = None
     old_denoised = None
+    rf = is_rectified_flow(model)
+    alpha_ratio = 1.
 
     for i in trange(len(sigmas) - 1, disable=disable):
         denoised = model(x, sigmas[i] * s_in, **extra_args)
-        sigma_down, sigma_up = get_ancestral_step(sigmas[i], sigmas[i + 1], eta=eta)
+        if rf:
+            sigma_down, alpha_ratio, sigma_up = get_ancestral_step_rf(sigmas[i], sigmas[i + 1], eta=eta)
+        else:
+            sigma_down, sigma_up = get_ancestral_step(sigmas[i], sigmas[i + 1], eta=eta)
         if callback is not None:
             callback({"x": x, "i": i, "sigma": sigmas[i], "sigma_hat": sigmas[i], "denoised": denoised})
         if sigma_down == 0 or old_denoised is None:
@@ -148,9 +178,10 @@ def res_multistep(model, x, sigmas, extra_args=None, callback=None, disable=None
 
             x = sigma_fn(h) * x + h * (b1 * denoised + b2 * old_denoised)
 
-        # Noise addition
+        # Noise addition. A flow model's signal is scaled by (1 - sigma), so it
+        # has to be rescaled from sigma_down to sigma_to before renoising.
         if sigma_up > 0:
-            x = x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
+            x = alpha_ratio * x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
 
         old_denoised = denoised
         old_sigma_down = sigma_down
