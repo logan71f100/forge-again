@@ -301,11 +301,15 @@ class IntegratedChromaTransformer2DModel(nn.Module):
         if use_cache:
             img = first_block_cache.apply(cache_key, torch.cat((txt, img), 1))
         else:
+            # the residual must start right after block 0 -- that is the state a
+            # cache hit resumes from, so it has to cover double blocks 1..N as
+            # well as the single blocks. Capturing it after the double blocks
+            # dropped their whole contribution on every skipped step.
+            hidden_before = torch.cat((txt, img), 1) if cache_key is not None else None
             for i, block in enumerate(self.double_blocks):
                 if i == 0:
                     continue
                 img, txt = block(img=img, txt=txt, mod=double_mod(i), pe=pe)
-            hidden_before = torch.cat((txt, img), 1) if cache_key is not None else None
             img = torch.cat((txt, img), 1)
             for i, block in enumerate(self.single_blocks):
                 single_mod = mod_vectors_dict[f"single_blocks.{i}.modulation.lin"]
