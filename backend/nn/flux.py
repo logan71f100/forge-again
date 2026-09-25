@@ -9,6 +9,7 @@ import torch
 from torch import nn
 from einops import rearrange, repeat
 from backend.attention import attention_function
+from backend.misc.first_block_cache import cache as first_block_cache
 from backend.utils import fp16_fix, tensor2parameter
 
 
@@ -386,13 +387,33 @@ class IntegratedFluxTransformer2DModel(nn.Module):
         del txt_ids, img_ids
         pe = self.pe_embedder(ids)
         del ids
-        for block in self.double_blocks:
-            img, txt = block(img=img, txt=txt, vec=vec, pe=pe)
-        img = torch.cat((txt, img), 1)
-        for block in self.single_blocks:
-            img = block(img, vec=vec, pe=pe)
+
+        # First Block Cache (backend/misc/first_block_cache.py): run block 0,
+        # and if its residual barely moved since the last computed step reuse
+        # the cached residual of every remaining block. Flow timesteps run
+        # 1 -> 0, so progress through the run is 1 - t.
+        t_key = float(timesteps.flatten()[0])
+        cache_key = first_block_cache.begin_call(progress=1.0 - t_key, t_key=t_key)
+        img_before = img
+        img, txt = self.double_blocks[0](img=img, txt=txt, vec=vec, pe=pe)
+        use_cache = cache_key is not None and first_block_cache.should_use_cache(cache_key, img - img_before)
+        del img_before
+        txt_len = txt.shape[1]
+
+        if use_cache:
+            img = first_block_cache.apply(cache_key, torch.cat((txt, img), 1))
+        else:
+            for block in self.double_blocks[1:]:
+                img, txt = block(img=img, txt=txt, vec=vec, pe=pe)
+            hidden_before = torch.cat((txt, img), 1) if cache_key is not None else None
+            img = torch.cat((txt, img), 1)
+            for block in self.single_blocks:
+                img = block(img, vec=vec, pe=pe)
+            if cache_key is not None:
+                first_block_cache.store(cache_key, img - hidden_before)
+                del hidden_before
         del pe
-        img = img[:, txt.shape[1]:, ...]
+        img = img[:, txt_len:, ...]
         del txt
         img = self.final_layer(img, vec)
         del vec

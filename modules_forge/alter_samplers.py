@@ -19,4 +19,12 @@ def build_constructor(sampler_name):
 
 samplers_data_alter = [
     sd_samplers_common.SamplerData('DDPM', build_constructor(sampler_name='ddpm'), ['ddpm'], {}),
+    # 2025 ComfyUI solvers (backend/modules/k_diffusion_extra.py). Same step
+    # count, better quality per step; the SDE ones are stochastic.
+    sd_samplers_common.SamplerData('Res Multistep', build_constructor(sampler_name='res_multistep'), ['res_multistep'], {}),
+    sd_samplers_common.SamplerData('Res Multistep Ancestral', build_constructor(sampler_name='res_multistep_ancestral'), ['res_multistep_ancestral'], {"uses_ensd": True}),
+    sd_samplers_common.SamplerData('Gradient Estimation', build_constructor(sampler_name='gradient_estimation'), ['gradient_estimation'], {}),
+    sd_samplers_common.SamplerData('ER SDE', build_constructor(sampler_name='er_sde'), ['er_sde'], {"uses_ensd": True}),
+    sd_samplers_common.SamplerData('SEEDS 2', build_constructor(sampler_name='seeds_2'), ['seeds_2'], {"uses_ensd": True, "second_order": True}),
+    sd_samplers_common.SamplerData('SEEDS 3', build_constructor(sampler_name='seeds_3'), ['seeds_3'], {"uses_ensd": True, "second_order": True}),
 ]

@@ -564,6 +564,24 @@ def check_downloader_file_safety() -> None:
                "traversal rejected, no clobbering, move + delete correct")
 
 
+def check_unit_tests() -> None:
+    """Run the torch-level unit tests (tests/unit): the First Block Cache
+    protocol and the ported solvers. They need torch, so they skip on a box
+    without the venv; tier 1 stays stdlib-only otherwise."""
+    name = "unit: first block cache + samplers"
+    probe = run([sys.executable, "-c", "import torch, diffusers, gguf, psutil"])
+    if probe.returncode != 0:
+        record(name, SKIP, "torch stack not importable here (run from the venv)")
+        return
+    r = run([sys.executable, "-m", "unittest", "discover", "-s", os.path.join(ROOT, "tests", "unit"), "-t", ROOT])
+    tail = (r.stderr or r.stdout).strip().splitlines()
+    summary = next((ln for ln in reversed(tail) if ln.startswith("Ran ")), "")
+    if r.returncode == 0:
+        record(name, PASS, summary)
+    else:
+        record(name, FAIL, "\n".join(tail[-15:]))
+
+
 def check_json_and_bom() -> None:
     """JSON must parse strictly and must NOT carry a UTF-8 BOM.
 
@@ -2269,6 +2287,7 @@ CHECKS = {
         ("session", check_session_pruning),
         ("filesafety", check_downloader_file_safety),
         ("dl-e2e", check_download_end_to_end),
+        ("unit", check_unit_tests),
         ("json", check_json_and_bom),
         ("eol", check_line_endings),
         ("privacy", check_no_personal_files_tracked),

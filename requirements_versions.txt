@@ -1,16 +1,18 @@
 --extra-index-url https://download.pytorch.org/whl/cu126
 setuptools>=70,<81   # was ==69.5.1; torch 2.13 needs >=70, but setuptools 81 removed pkg_resources which pytorch_lightning 1.9.4 still requires
 GitPython==3.1.62   # security: clears 11 GHSAs (command-injection/path-traversal); API-compatible patch bump
-Pillow>=11   # forced to 12.x by the modern stack (was 9.5.0)
-accelerate==1.14.0
+Pillow>=12.3.0   # forced to 12.x by the modern stack (was 9.5.0); 12.3.0 closes the 2026 PSD/EPS/FontFile CVEs
+accelerate==1.15.0
 blendmodes>=2025   # numpy-2 / Pillow-12 compatible (2022 capped numpy<2, Pillow<10)
 clean-fid==0.1.35
 diskcache==5.6.3
-einops==0.4.1
+einops==0.8.2
 facexlib==0.3.0
 # PORT TARGET: gradio 6 (current line) — full modernization, one migration.
 # Chain: gradio 6 needs hub>=1.2 -> transformers must be 5.x (needs hub>=1.5).
 fastapi>=0.115.2
+starlette>=1.3.1   # security floor: CVE-2026-54283 form-limit DoS (gradio 6 allows <2)
+python-multipart>=0.0.30   # security floor: CVE-2026-40347 / CVE-2026-53539 parser DoS
 gradio==6.20.0
 httpcore
 inflection==0.5.1
@@ -34,15 +36,15 @@ onnxruntime==1.19.2
 psutil>=5.9.5
 pytorch_lightning==1.9.4
 resize-right==0.0.2
-safetensors>=0.4.2
+safetensors>=0.8.0   # high-level safetensors.torch API unchanged; required by transformers 5.17+/diffusers 0.40+
 scikit-image>=0.24   # numpy-2 compatible build (0.21 was numpy-1 ABI)
-spandrel==0.3.4
-spandrel-extra-arches==0.1.1
+spandrel==0.4.2   # adds MoSR, SeemoRe, RealPLKSR DySample/LayerNorm, MoESR, RCAN, FDAT, AuraSR upscalers
+spandrel-extra-arches==0.2.0
 tomesd==0.1.3
 # PINNED to the cu126 CUDA build — an unpinned torch resolves to a CPU wheel from PyPI
 torch==2.13.0+cu126
 torchvision==0.28.0+cu126
-torchdiffeq==0.2.3
+torchdiffeq==0.2.5
 torchsde==0.2.6
 transformers==5.14.1   # 5.x required: gradio 6 forces hub 1.x, which no transformers 4.x accepts
 httpx>=0.26

@@ -3,6 +3,7 @@ import torch
 from torch import nn
 from einops import rearrange, repeat
 from backend.attention import attention_function
+from backend.misc.first_block_cache import cache as first_block_cache
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 
 
@@ -706,8 +707,24 @@ class IntegratedUNet2DConditionModel(nn.Module, ConfigMixin):
             assert y.shape[0] == x.shape[0]
             emb = emb + self.label_emb(y)
         h = x
+
+        # First Block Cache (backend/misc/first_block_cache.py): input block 0
+        # is only the input conv, so the comparator is the residual of input
+        # block 1 (the first real stage); everything after it is cached.
+        # Discrete timesteps count down from the model's max, so progress
+        # through the run is 1 - t / t_max.
+        t_key = float(timesteps.flatten()[0])
+        t_max = float(getattr(self, "num_timesteps", 1000) - 1) or 1.0
+        cache_key = first_block_cache.begin_call(progress=1.0 - t_key / t_max, t_key=t_key)
+        use_cache = False
+        h_before_first = None
+
         for id, module in enumerate(self.input_blocks):
+            if use_cache:
+                break
             transformer_options["block"] = ("input", id)
+            if id == 1:
+                h_before_first = h
             for block_modifier in block_modifiers:
                 h = block_modifier(h, 'before', transformer_options)
             h = module(h, emb, context, transformer_options)
@@ -723,6 +740,16 @@ class IntegratedUNet2DConditionModel(nn.Module, ConfigMixin):
                 patch = transformer_patches["input_block_patch_after_skip"]
                 for p in patch:
                     h = p(h, transformer_options)
+            if id == 1 and cache_key is not None:
+                use_cache = first_block_cache.should_use_cache(cache_key, h - h_before_first)
+                h_after_first = h
+        if use_cache:
+            h = first_block_cache.apply(cache_key, h_after_first)
+            del h_after_first
+            hs = []
+            return self._unet_output(h, x, transformer_options, block_modifiers)
+        del h_before_first
+
         transformer_options["block"] = ("middle", 0)
         for block_modifier in block_modifiers:
             h = block_modifier(h, 'before', transformer_options)
@@ -749,6 +776,12 @@ class IntegratedUNet2DConditionModel(nn.Module, ConfigMixin):
             h = module(h, emb, context, transformer_options, output_shape)
             for block_modifier in block_modifiers:
                 h = block_modifier(h, 'after', transformer_options)
+        if cache_key is not None:
+            first_block_cache.store(cache_key, h - h_after_first)
+            del h_after_first
+        return self._unet_output(h, x, transformer_options, block_modifiers)
+
+    def _unet_output(self, h, x, transformer_options, block_modifiers):
         transformer_options["block"] = ("last", 0)
         for block_modifier in block_modifiers:
             h = block_modifier(h, 'before', transformer_options)

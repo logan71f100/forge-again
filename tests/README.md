@@ -38,6 +38,7 @@ everything at the end.
 | `json` | Malformed JSON, and **UTF-8 BOMs** — a BOM in `config.json` makes Forge fail to read it and silently reset every setting to defaults. |
 | `eol` | `.bat` that isn't CRLF (cmd misparses labels) and `.sh` that isn't LF (bash rejects it). |
 | `privacy` | Personal or generated files becoming tracked by git — `config.json`, `outputs/`, `extra-args.txt` and friends. |
+| `unit` | The First Block Cache protocol (`tests/unit/test_first_block_cache.py`) and the ported solvers (`tests/unit/test_samplers.py`) — pure-torch unit tests on CPU. Skips when torch is not importable, so run this tier from the venv to get it. |
 | `pins` | Installed versions drifting from the `==` pins. Extension installers run on every startup and pull packages past their caps, so this drifts silently on a working machine. |
 | `classify` | The model downloader sorting a file into the wrong folder. Cases include the real regressions: `Kataragi_inpaintXL` (a ControlNet the "xl" rule used to claim as a checkpoint), `ae.safetensors` (the Flux VAE, which contains no "vae"), and the `JuggernautXL`-style names that broke when the XL match was made too strict. |
 | `error-tips` | A recognizable runtime error losing its plain-language tip, and the tip losing the field it highlights. |

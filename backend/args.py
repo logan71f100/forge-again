@@ -67,6 +67,13 @@ parser.add_argument("--pin-shared-memory", action="store_true")
 parser.add_argument("--cudnn-benchmark", action="store_true")
 parser.add_argument("--tf32", action="store_true")
 parser.add_argument("--use-sage-attention", action="store_true")
+#   --fast-fp16-accumulation lets fp16 matmuls accumulate in fp16 instead of
+#                        fp32 (torch.backends.cuda.matmul.allow_fp16_accumulation,
+#                        torch >= 2.7). ComfyUI's `--fast fp16_accumulation`:
+#                        +10-15% on fp16 UNets (SD1.5/SDXL) on Ampere and newer
+#                        at batch 1, more at larger batches; no effect on bf16 or
+#                        fp8 models. Slight precision loss; keep it opt-in.
+parser.add_argument("--fast-fp16-accumulation", action="store_true")
 
 # --vram-fraction  caps how much of the card THIS process may reserve, as a
 #                  fraction of total VRAM. The point is NOT to save memory, it is

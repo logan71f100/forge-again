@@ -284,6 +284,16 @@ if args.tf32:
     except Exception as e:
         print(f"Could not enable TF32: {e}")
 
+if args.fast_fp16_accumulation:
+    try:
+        if hasattr(torch.backends.cuda.matmul, "allow_fp16_accumulation"):
+            torch.backends.cuda.matmul.allow_fp16_accumulation = True
+            print("Enabled fp16 accumulation for fp16 matmuls (--fast-fp16-accumulation).")
+        else:
+            print("--fast-fp16-accumulation requested but this torch build has no allow_fp16_accumulation flag (needs torch >= 2.7).")
+    except Exception as e:
+        print(f"Could not enable fp16 accumulation: {e}")
+
 if args.always_low_vram:
     set_vram_to = VRAMState.LOW_VRAM
     lowvram_available = True

@@ -208,6 +208,30 @@ def ays_32_sigmas(n, sigma_min, sigma_max, device='cpu'):
     return torch.FloatTensor(sigmas).to(device)
 
 
+def linear_quadratic_scheduler(n, sigma_min, sigma_max, device='cpu', threshold_noise=0.025, linear_steps=None):
+    """Linear-then-quadratic schedule (from genmoai/mochi, via ComfyUI). Spends
+    the first half of the steps in small linear increments near the clean end
+    and the rest quadratically; built for flow models (sigma_max = 1)."""
+    if n == 1:
+        sigma_schedule = [1.0, 0.0]
+    else:
+        if linear_steps is None:
+            linear_steps = n // 2
+        linear_sigma_schedule = [i * threshold_noise / linear_steps for i in range(linear_steps)]
+        threshold_noise_step_diff = linear_steps - threshold_noise * n
+        quadratic_steps = n - linear_steps
+        quadratic_coef = threshold_noise_step_diff / (linear_steps * quadratic_steps ** 2)
+        linear_coef = threshold_noise / linear_steps - 2 * threshold_noise_step_diff / (quadratic_steps ** 2)
+        const = quadratic_coef * (linear_steps ** 2)
+        quadratic_sigma_schedule = [
+            quadratic_coef * (i ** 2) + linear_coef * i + const
+            for i in range(linear_steps, n)
+        ]
+        sigma_schedule = linear_sigma_schedule + quadratic_sigma_schedule + [1.0]
+        sigma_schedule = [1.0 - x for x in sigma_schedule]
+    return torch.FloatTensor(sigma_schedule).to(device) * sigma_max
+
+
 schedulers = [
     Scheduler('automatic', 'Automatic', None),
     Scheduler('uniform', 'Uniform', uniform, need_inner_model=True),
@@ -222,6 +246,7 @@ schedulers = [
     Scheduler('ddim', 'DDIM', ddim_scheduler, need_inner_model=True),
     Scheduler('beta', 'Beta', beta_scheduler, need_inner_model=True),
     Scheduler('turbo', 'Turbo', turbo_scheduler, need_inner_model=True),
+    Scheduler('linear_quadratic', 'Linear Quadratic', linear_quadratic_scheduler),
     Scheduler('align_your_steps_GITS', 'Align Your Steps GITS', get_align_your_steps_sigmas_GITS),
     Scheduler('align_your_steps_11', 'Align Your Steps 11', ays_11_sigmas),
     Scheduler('align_your_steps_32', 'Align Your Steps 32', ays_32_sigmas),

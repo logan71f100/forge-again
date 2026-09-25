@@ -10,6 +10,7 @@ from einops import rearrange, repeat
 from backend.attention import attention_function
 from backend.utils import fp16_fix, tensor2parameter
 from backend.nn.flux import attention, rope, timestep_embedding, EmbedND, MLPEmbedder, RMSNorm, QKNorm, SelfAttention
+from backend.misc.first_block_cache import cache as first_block_cache
 
 class Approximator(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, hidden_dim: int, n_layers = 4):
@@ -284,17 +285,36 @@ class IntegratedChromaTransformer2DModel(nn.Module):
         del txt_ids, img_ids
         pe = self.pe_embedder(ids)
         del ids
-        for i, block in enumerate(self.double_blocks):
-            img_mod = mod_vectors_dict[f"double_blocks.{i}.img_mod.lin"]
-            txt_mod = mod_vectors_dict[f"double_blocks.{i}.txt_mod.lin"]
-            double_mod = [img_mod, txt_mod]
-            img, txt = block(img=img, txt=txt, mod=double_mod, pe=pe)
-        img = torch.cat((txt, img), 1)
-        for i, block in enumerate(self.single_blocks):
-            single_mod = mod_vectors_dict[f"single_blocks.{i}.modulation.lin"]
-            img = block(img, mod=single_mod, pe=pe)
+
+        def double_mod(i):
+            return [mod_vectors_dict[f"double_blocks.{i}.img_mod.lin"], mod_vectors_dict[f"double_blocks.{i}.txt_mod.lin"]]
+
+        # First Block Cache -- see backend/nn/flux.py for the scheme.
+        t_key = float(timesteps.flatten()[0])
+        cache_key = first_block_cache.begin_call(progress=1.0 - t_key, t_key=t_key)
+        img_before = img
+        img, txt = self.double_blocks[0](img=img, txt=txt, mod=double_mod(0), pe=pe)
+        use_cache = cache_key is not None and first_block_cache.should_use_cache(cache_key, img - img_before)
+        del img_before
+        txt_len = txt.shape[1]
+
+        if use_cache:
+            img = first_block_cache.apply(cache_key, torch.cat((txt, img), 1))
+        else:
+            for i, block in enumerate(self.double_blocks):
+                if i == 0:
+                    continue
+                img, txt = block(img=img, txt=txt, mod=double_mod(i), pe=pe)
+            hidden_before = torch.cat((txt, img), 1) if cache_key is not None else None
+            img = torch.cat((txt, img), 1)
+            for i, block in enumerate(self.single_blocks):
+                single_mod = mod_vectors_dict[f"single_blocks.{i}.modulation.lin"]
+                img = block(img, mod=single_mod, pe=pe)
+            if cache_key is not None:
+                first_block_cache.store(cache_key, img - hidden_before)
+                del hidden_before
         del pe
-        img = img[:, txt.shape[1]:, ...]
+        img = img[:, txt_len:, ...]
         final_mod = mod_vectors_dict["final_layer.adaLN_modulation.1"]
         img = self.final_layer(img, final_mod)
         return img
