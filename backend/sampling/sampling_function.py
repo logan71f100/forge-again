@@ -311,9 +311,20 @@ def sampling_function_inner(model, x, timestep, uncond, cond, cond_scale, model_
     else:
         cfg_result = uncond_pred + (cond_pred - uncond_pred) * cond_scale
 
+    # The guidance scale that actually produced cfg_result, for post-CFG functions.
+    # ComfyUI passes it as args['cond_scale'] and ported post-CFG nodes read it
+    # (CFG-Zero* died on every enabled run with KeyError: 'cond_scale'). On the
+    # edit-model path the applied scale is cond_scale * edit_strength. Computed
+    # here rather than folded into the lines above, so every existing result
+    # stays byte-identical.
+    if "sampler_cfg_function" not in model_options and not math.isclose(edit_strength, 1.0):
+        applied_scale = cond_scale * edit_strength
+    else:
+        applied_scale = cond_scale
+
     for fn in model_options.get("sampler_post_cfg_function", []):
         args = {"denoised": cfg_result, "cond": cond, "uncond": uncond, "model": model, "uncond_denoised": uncond_pred, "cond_denoised": cond_pred,
-                "sigma": timestep, "model_options": model_options, "input": x}
+                "sigma": timestep, "model_options": model_options, "input": x, "cond_scale": applied_scale}
         cfg_result = fn(args)
 
     if return_full:
