@@ -73,6 +73,16 @@ class UiLoadsave:
                     return            # recorded; there is nothing saved to apply
             elif condition and not condition(saved_value):
                 pass
+            elif field in ('value', 'open') and isinstance(obj, (gr.Checkbox, gr.Accordion)) \
+                    and not isinstance(saved_value, bool):
+                # Two controls share a ui-config key when they share a label on
+                # the same tab. Replacer's "Hires. fix" radio ('Follow txt2img' /
+                # 'Off' / 'On') and the core Hires. fix accordion both save to
+                # txt2img/Hires. fix/value -- and the string 'Follow txt2img' is
+                # truthy, so hires fix came up ENABLED on every page load. A
+                # boolean control only takes a boolean; anything else is some
+                # other control's value, so keep the built default.
+                pass
             else:
                 if isinstance(obj, gr.Textbox) and field == 'value':  # due to an undesirable behavior of gr.Textbox, if you give it an int value instead of str, everything dies
                     saved_value = str(saved_value)
