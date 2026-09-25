@@ -1,12 +1,14 @@
 // various hints and extra info for the settings tab
 
-var settingsHintsSetup = false;
+// The Settings tab is built lazily, so the first onOptionsChanged (right after
+// page load) finds no #settings controls. The old one-shot flag then stopped
+// every retry and no comment/info text was ever rendered. Mark each control
+// instead and re-run on UI updates.
+function setupSettingsHints() {
+    if (!opts._comments_before || !opts._comments_after) return;
 
-onOptionsChanged(function() {
-    if (settingsHintsSetup) return;
-    settingsHintsSetup = true;
-
-    gradioApp().querySelectorAll('#settings [id^=setting_]').forEach(function(div) {
+    gradioApp().querySelectorAll('#settings [id^=setting_]:not([data-hints-setup])').forEach(function(div) {
+        div.dataset.hintsSetup = '1';
         var name = div.id.substr(8);
         var commentBefore = opts._comments_before[name];
         var commentAfter = opts._comments_after[name];
@@ -43,7 +45,10 @@ onOptionsChanged(function() {
             span.parentElement.insertBefore(document.createTextNode('\xa0'), span.nextSibling);
         }
     });
-});
+}
+
+onOptionsChanged(setupSettingsHints);
+onAfterUiUpdate(setupSettingsHints);
 
 function settingsHintsShowQuicksettings() {
     requestGet("./internal/quicksettings-hint", {}, function(data) {

@@ -473,8 +473,13 @@ div.toprow-compact-tools{
 
 #settings > div{
     border: none;
-    margin-left: 10em;
     padding: 0 var(--spacing-xl);
+}
+
+/* gradio 4 only: the tab list floats as a 10em sidebar, so the panes make room for it.
+   gradio 6 renders the tab list as a horizontal div.tab-wrapper strip instead. */
+#settings > div.tab-nav ~ div{
+    margin-left: 10em;
 }
 
 #settings > div.tab-nav{

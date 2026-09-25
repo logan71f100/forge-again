@@ -88,13 +88,15 @@ onAfterUiUpdate(function() {
 
     var tabImg2img = gradioApp().querySelector("#tab_img2img");
     if (tabImg2img) {
-        if (tabImg2img.style.display == "block") {
-            let inputs = gradioApp().querySelectorAll('input');
+        // gradio 6 renders the active pane as display:flex (see dimensionChange),
+        // so the old `== "block"` test was never true and the listeners below
+        // were never attached -- the overlay was dead.
+        if (tabImg2img.style.display != "none" && tabImg2img.offsetParent) {
+            let inputs = gradioApp().querySelectorAll('#img2img_width input, #img2img_height input');
             inputs.forEach(function(e) {
-                var is_width = (e.parentElement.id == "img2img_width" && e.type == "range") || 
-					(e.parentElement.parentElement.parentElement.id == "img2img_width" && e.type == "number");
-                var is_height = (e.parentElement.id == "img2img_height" && e.type == "range") || 
-					(e.parentElement.parentElement.parentElement.id == "img2img_height" && e.type == "number");
+                if (e.type != "range" && e.type != "number") return;
+                var is_width = !!e.closest('#img2img_width');
+                var is_height = !!e.closest('#img2img_height');
 
                 if ((is_width || is_height) && !e.classList.contains('scrollwatch')) {
                     e.addEventListener('input', function(e) {

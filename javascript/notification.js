@@ -5,10 +5,13 @@ let lastHeadImg = null;
 let notificationButton = null;
 
 onAfterUiUpdate(function() {
-    if (notificationButton == null) {
+    // the button lives in the lazily-built Settings tab, whose contents gradio 6
+    // remounts on sub-tab switches -- a cached node goes stale
+    if (notificationButton == null || !notificationButton.isConnected) {
         notificationButton = gradioApp().getElementById('request_notifications');
 
-        if (notificationButton != null) {
+        if (notificationButton != null && !notificationButton.dataset.notifyWired) {
+            notificationButton.dataset.notifyWired = '1';
             notificationButton.addEventListener('click', () => {
                 void Notification.requestPermission();
             }, true);
@@ -26,9 +29,11 @@ onAfterUiUpdate(function() {
     lastHeadImg = headImg;
 
     // play notification sound if available
-    const notificationAudio = gradioApp().querySelector('#audio_notification #waveform > div')?.shadowRoot?.querySelector('audio');
+    const notificationAudio = gradioApp().querySelector('#audio_notification #waveform > div')?.shadowRoot?.querySelector('audio') ||
+        gradioApp().querySelector('#audio_notification audio');
     if (notificationAudio) {
-        notificationAudio.volume = opts.notification_volume / 100.0 || 1.0;
+        // `x || 1.0` turned a volume of 0 (mute) into full volume
+        notificationAudio.volume = (typeof opts.notification_volume === 'number') ? opts.notification_volume / 100.0 : 1.0;
         notificationAudio.play();
     }
 

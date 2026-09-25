@@ -1352,8 +1352,9 @@
             const err = newErrs[0].slice(0, 400);
             if (anyControlNetEnabled() || /controlnet|mat1 and mat2|shapes cannot/i.test(err)) cnFailCount++;
             sysMsg('⚠ Forge error: ' + err.slice(0, 120));
-            await startLLM();
-            await waitForLLM(300000);
+            // only the local provider was unloaded for the run (see juggle above);
+            // restarting it with a cloud provider selected unloaded Forge's model
+            if (juggle) { await startLLM(); await waitForLLM(300000); }
             return [{ type: 'text', text: `[tool error] the generation FAILED with a Forge error (not judged, not recorded): "${err}". ${interpretForgeError(newErrs[0])}` }];
         }
 
@@ -2883,7 +2884,8 @@
                     // is text-gen actually down, or just reloading? recover accordingly
                     let up = false;
                     try { const s = await apiJSON('/forge-ai/status'); up = !!(s.textgen_api_ready && s.model_loaded); } catch (e2) { /* status unreachable */ }
-                    if (!up) {
+                    // a cloud/bridge provider has no local server to restart
+                    if (!up && provider === 'local') {
                         setActivity('🔄 restarting the LLM…');
                         try { await startLLM(); } catch (e3) { /* keep trying */ }
                         await waitForLLM(300000);
@@ -3122,14 +3124,19 @@
         try {
             const s = await apiJSON('/forge-ai/status');
             provider = s.provider || provider;
-            if (provider === 'claude') {
+            if (provider === 'claude' || provider === 'claude_code') {
                 if (s.claude_ready) return true;
-                sysMsg('☁ Claude selected but no API key found. Set ANTHROPIC_API_KEY or create extensions/forge-ai-assistant/anthropic_key.txt.');
+                // neither provider has a local server to boot: falling through to
+                // startLLM() unloaded Forge's checkpoint and spawned llama-server,
+                // then waited 5 minutes for a status that could never become ready
+                sysMsg(provider === 'claude_code' ?
+                    '🤝 Claude Code selected but no takeover session is active — ask your Claude Code session to take over the Forge session.' :
+                    '☁ Claude selected but no API key found. Set ANTHROPIC_API_KEY or create extensions/forge-ai-assistant/anthropic_key.txt.');
                 return false;
             }
             if (s.textgen_api_ready && s.model_loaded) return true;
         } catch (e) { /* fall through to start */ }
-        if (provider === 'claude') return false;
+        if (provider !== 'local') return false;
         sysMsg('LLM is off — starting it for you… (cold boot can take a minute, warm reload ~10s)');
         try {
             await startLLM();

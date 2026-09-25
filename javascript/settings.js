@@ -20,7 +20,10 @@ function settingsShowOneTab() {
 
 function setupSettingsSearch() {
     var edit = gradioApp().querySelector('#settings_search');
-    var editTextarea = gradioApp().querySelector('#settings_search > label > input');
+    // gradio 6 puts a div.input-container between the label and the input, so
+    // the old `> label > input` selector never matched: the search box was never
+    // wired and the observer below ran on every DOM mutation for the page's life
+    var editTextarea = gradioApp().querySelector('#settings_search input, #settings_search textarea');
     var buttonShowAllPages = gradioApp().getElementById('settings_show_all_pages');
     var settings_tabs = gradioApp().querySelector('#settings div');
     // Settings is a lazily-built tab: none of the above exist at load, which is

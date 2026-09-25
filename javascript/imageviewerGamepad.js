@@ -1,11 +1,17 @@
 let gamepads = [];
 
+function lightboxIsOpen() {
+    const lb = gradioApp().getElementById('lightboxModal');
+    return !!lb && lb.style.display === 'flex';
+}
+
 window.addEventListener('gamepadconnected', (e) => {
     const index = e.gamepad.index;
     let isWaiting = false;
     gamepads[index] = setInterval(async() => {
-        if (!opts.js_modal_lightbox_gamepad || isWaiting) return;
+        if (!opts.js_modal_lightbox_gamepad || isWaiting || !lightboxIsOpen()) return;
         const gamepad = navigator.getGamepads()[index];
+        if (!gamepad) return; // Chromium reports null slots around a disconnect
         const xValue = gamepad.axes[0];
         if (xValue <= -0.3) {
             modalPrevImage(e);
@@ -16,7 +22,9 @@ window.addEventListener('gamepadconnected', (e) => {
         }
         if (isWaiting) {
             await sleepUntil(() => {
-                const xValue = navigator.getGamepads()[index].axes[0];
+                const gp = navigator.getGamepads()[index];
+                if (!gp) return true;
+                const xValue = gp.axes[0];
                 if (xValue < 0.3 && xValue > -0.3) {
                     return true;
                 }
@@ -36,7 +44,9 @@ I use the wheel event because there's currently no way to do it properly with we
  */
 let isScrolling = false;
 window.addEventListener('wheel', (e) => {
-    if (!opts.js_modal_lightbox_gamepad || isScrolling) return;
+    // only while the lightbox is open: otherwise any horizontal trackpad
+    // scroll anywhere on the page re-selected gallery images
+    if (!opts.js_modal_lightbox_gamepad || isScrolling || !lightboxIsOpen()) return;
     isScrolling = true;
 
     if (e.deltaX <= -0.6) {

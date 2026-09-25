@@ -923,7 +923,7 @@ def create_ui():
 
             toprow.ui_styles.dropdown.change(fn=token_counter_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
             toprow.ui_styles.dropdown.change(fn=token_counter_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
-            toprow.token_button.click(fn=update_token_counter, inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
+            toprow.token_button.click(fn=token_counter_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
             toprow.negative_token_button.click(fn=token_counter_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
 
             img2img_paste_fields = [
@@ -1220,20 +1220,25 @@ def create_ui():
         # resets its children to their build-time props — e.g. Clip skip (hidden
         # per-mode after build) reappeared on every tab switch. Only emit an update
         # when the desired visibility actually changes.
-        _qs_row_visible = [True]
+        # Tracked per browser session (gr.State), not in a create_ui-local: a shared
+        # flag desynced across sessions/reloads -- after a reload the row is visible
+        # again while the flag still said hidden, so the next click on such a tab
+        # "changed nothing" and the bar stayed put.
+        _qs_row_visible = gr.State(True)
 
-        def tab_changed(evt: gr.SelectData):
+        def tab_changed(current, evt: gr.SelectData):
             no_quick_setting = getattr(shared.opts, "tabs_without_quick_settings_bar", [])
             want = evt.value not in no_quick_setting
-            if want == _qs_row_visible[0]:
-                return gr.update()
-            _qs_row_visible[0] = want
-            return gr.update(visible=want)
+            if want == current:
+                return gr.update(), current
+            return gr.update(visible=want), want
 
-        tabs.select(tab_changed, outputs=[quicksettings_row], show_progress=False, queue=False)
+        tabs.select(tab_changed, inputs=[_qs_row_visible], outputs=[quicksettings_row, _qs_row_visible], show_progress=False, queue=False)
 
         if os.path.exists(os.path.join(script_path, "notification.mp3")) and shared.opts.notification_audio:
-            gr.Audio(interactive=False, value=os.path.join(script_path, "notification.mp3"), elem_id="audio_notification", visible=False)
+            # notification.js plays this element; gradio 6 does not mount visible=False
+            # components, so mount it CSS-hidden (display:none does not block play()).
+            gr.Audio(interactive=False, value=os.path.join(script_path, "notification.mp3"), elem_id="audio_notification", visible=True, elem_classes=['webui-hidden-mounted'])
 
         footer = shared.html("footer.html")
         footer = footer.format(versions=versions_html(), api_docs="/docs" if shared.cmd_opts.api else "https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API")

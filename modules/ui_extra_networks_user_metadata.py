@@ -150,6 +150,12 @@ class UserMetadataEditor:
             .click(fn=func, inputs=[self.edit_name_input, *components], outputs=[])\
             .then(fn=None, _js="function(name){closePopup(); extraNetworksRefreshSingleCard(" + json.dumps(self.page.name) + "," + json.dumps(self.tabname) + ", name);}", inputs=[self.edit_name_input], outputs=[])
 
+    def show_box_js(self):
+        """js that reveals the editor box once its values are loaded. A gr.update(visible=True)
+        would remount the container under gradio 6 (dropping it out of the popup it was moved
+        into), so the CSS hide is lifted in place instead."""
+        return "function(){ var b = gradioApp().getElementById(" + json.dumps(self.id_part) + "); if (b) b.classList.remove('webui-hidden-mounted'); }"
+
     def create_editor(self):
         self.create_default_editor_elems()
 
@@ -159,16 +165,20 @@ class UserMetadataEditor:
 
         self.button_edit\
             .click(fn=self.put_values_into_components, inputs=[self.edit_name_input], outputs=[self.edit_name, self.edit_description, self.html_filedata, self.html_preview, self.edit_notes])\
-            .then(fn=lambda: gr.update(visible=True), inputs=[], outputs=[self.box])
+            .then(fn=None, _js=self.show_box_js(), inputs=[], outputs=[])
 
         self.setup_save_handler(self.button_save, self.save_user_metadata, [self.edit_description, self.edit_notes])
 
     def create_ui(self):
-        with gr.Box(visible=False, elem_id=self.id_part, elem_classes="edit-user-metadata") as box:
+        # extraNetworksEditUserMetadata (extraNetworks.js) fills the name textbox, clicks the
+        # button and moves this box into the popup, all synchronously -- so all three must be
+        # in the DOM. gradio 6 does not mount visible=False components: mount them CSS-hidden
+        # instead, and lift the CSS hide from JS once the values are in (see show_box_js).
+        with gr.Box(visible=True, elem_id=self.id_part, elem_classes=["edit-user-metadata", "webui-hidden-mounted"]) as box:
             self.box = box
 
-            self.edit_name_input = gr.Textbox("Edit user metadata card id", visible=False, elem_id=f"{self.id_part}_name")
-            self.button_edit = gr.Button("Edit user metadata", visible=False, elem_id=f"{self.id_part}_button")
+            self.edit_name_input = gr.Textbox("Edit user metadata card id", visible=True, elem_classes=['webui-hidden-mounted'], elem_id=f"{self.id_part}_name")
+            self.button_edit = gr.Button("Edit user metadata", visible=True, elem_classes=['webui-hidden-mounted'], elem_id=f"{self.id_part}_button")
 
             self.create_editor()
 

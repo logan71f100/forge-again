@@ -167,7 +167,12 @@ def create_output_panel(tabname, outdir, toprow=None):
 
         try:
             if 'Sub' in shared.opts.open_dir_button_choice:
-                image_dir = os.path.split(images[index]["name"].rsplit('?', 1)[0])[0]
+                # the gallery is type="pil": entries arrive as (image, caption) tuples, not dicts
+                item = images[index]
+                if isinstance(item, (tuple, list)):
+                    item = item[0]
+                path = item["name"] if isinstance(item, dict) else getattr(item, "filename", None) or getattr(item, "path", None)
+                image_dir = os.path.split(str(path).rsplit('?', 1)[0])[0]
                 if 'temp' in shared.opts.open_dir_button_choice or not ui_tempdir.is_gradio_temp_path(image_dir):
                     f = image_dir
         except Exception:

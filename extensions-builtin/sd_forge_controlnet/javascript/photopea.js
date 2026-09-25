@@ -232,8 +232,10 @@
           // Stop waiting after 10s.
           setTimeout(resolve, 10000);
 
-          // Testing whether photopea is able to accept message.
-          while (true) {
+          // Testing whether photopea is able to accept message. Bounded to the
+          // same 10s: with photopea unreachable this loop used to run forever.
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline) {
             try {
               await this.invoke(hasActiveDocument);
               break;
@@ -281,7 +283,12 @@
         };
 
         window.addEventListener("message", photopeaMessageHandle);
-        setTimeout(() => reject("Photopea message timeout"), this.timeout);
+        // drop the listener on timeout too -- it was only removed on "done", so
+        // every timed-out call left one behind for the life of the page
+        setTimeout(() => {
+          window.removeEventListener("message", photopeaMessageHandle);
+          reject("Photopea message timeout");
+        }, this.timeout);
         this.photopeaIframe.contentWindow.postMessage(message, "*");
       });
     }
@@ -304,7 +311,8 @@
      */
     async fetchFromControlNet(tabs) {
       if (tabs.length === 0) return;
-      const isImg2Img = tabs[0].querySelector('.cnet-mask-upload').id.includes('img2img');
+      // the mask-upload checkbox is unmounted in img2img (visible=False); use the tab's container
+      const isImg2Img = !!tabs[0].closest('#img2img_controlnet');
       const generationType = isImg2Img ? 'img2img' : 'txt2img';
       const width = gradioApp().querySelector(`#${generationType}_width input[type=number]`).value;
       const height = gradioApp().querySelector(`#${generationType}_height input[type=number]`).value;
@@ -357,7 +365,7 @@
 
         // Make sure `UsePreviewAsInput` checkbox is checked.
         const checkbox = tab.querySelector('.cnet-preview-as-input input[type="checkbox"]');
-        if (!checkbox.checked) {
+        if (checkbox && !checkbox.checked) {
           checkbox.click();
         }
       }

@@ -265,7 +265,9 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
         // "Resume / Cancel" for a job that no longer exists — and those labels
         // persist, since the buttons are reused by the next run.
         if (tabname) setResumeMode(tabname, false);
-        parentProgressbar.removeChild(divProgress);
+        // the watchdog's recoverStuckUI(true) may already have removed the
+        // node; removeChild would then throw and skip the cleanup below
+        if (divProgress.parentNode) divProgress.parentNode.removeChild(divProgress);
         divProgress = null;          // set BEFORE the sweep: any late img.onload
                                      // must see the run as over (see funLivePreview)
         clearLivePreviews();

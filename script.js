@@ -14,7 +14,11 @@ function gradioApp() {
  * Get the currently selected top-level UI tab button (e.g. the button that says "Extras").
  */
 function get_uiCurrentTab() {
-    return gradioApp().querySelector('#tabs > .tab-nav > button.selected');
+    // gradio 4 rendered the tab bar as `.tab-nav > button`; gradio 6 nests the
+    // buttons under `.tab-wrapper` with role=tab. Accept both -- with the old
+    // selector alone this returned null forever, so uiCurrentTab never got set
+    // and onUiTabChange callbacks never fired.
+    return gradioApp().querySelector('#tabs > .tab-wrapper button[role="tab"].selected, #tabs > .tab-nav > button.selected');
 }
 
 /**
@@ -147,12 +151,16 @@ document.addEventListener('keydown', function(e) {
     const isAltKey = e.altKey;
     const isEsc = e.key === 'Escape';
 
-    const generateButton = get_uiCurrentTabContent().querySelector('button[id$=_generate]');
-    const interruptButton = get_uiCurrentTabContent().querySelector('button[id$=_interrupt]');
-    const skipButton = get_uiCurrentTabContent().querySelector('button[id$=_skip]');
+    // Settings / Extensions / PNG Info have no generate box, and gradio 6
+    // unmounts inactive panes -- every one of these can be null.
+    const tabContent = get_uiCurrentTabContent();
+    if (!tabContent) return;
+    const generateButton = tabContent.querySelector('button[id$=_generate]');
+    const interruptButton = tabContent.querySelector('button[id$=_interrupt]');
+    const skipButton = tabContent.querySelector('button[id$=_skip]');
 
-    if (isCtrlKey && isEnter) {
-        if (interruptButton.style.display === 'block') {
+    if (isCtrlKey && isEnter && generateButton) {
+        if (interruptButton && interruptButton.style.display === 'block') {
             interruptButton.click();
             const callback = (mutationList) => {
                 for (const mutation of mutationList) {
@@ -172,12 +180,12 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault();
     }
 
-    if (isAltKey && isEnter) {
+    if (isAltKey && isEnter && skipButton) {
         skipButton.click();
         e.preventDefault();
     }
 
-    if (isEsc) {
+    if (isEsc && interruptButton) {
         const globalPopup = document.querySelector('.global-popup');
         const lightboxModal = document.querySelector('#lightboxModal');
         if (!globalPopup || globalPopup.style.display === 'none') {

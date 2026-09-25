@@ -169,6 +169,9 @@ function showProfile(path, cutoff = 0.05) {
         data.records['total'] = data.total;
         const table = createVisualizationTable(data.records, cutoff, "number");
         popup(table);
+    }, function() {
+        // requestGet calls the error handler unconditionally on failure
+        console.error('profile request failed:', path);
     });
 }
 

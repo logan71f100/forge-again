@@ -13,7 +13,8 @@ var contextMenuInit = function() {
             oldMenu.remove();
         }
 
-        let baseStyle = window.getComputedStyle(uiCurrentTab);
+        // uiCurrentTab can be null (no tab button matched yet); getComputedStyle(null) throws
+        let baseStyle = window.getComputedStyle(uiCurrentTab || get_uiCurrentTabContent() || document.body);
 
         const contextMenu = document.createElement('nav');
         contextMenu.id = "context-menu";

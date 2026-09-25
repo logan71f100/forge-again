@@ -262,7 +262,8 @@ class UiSettings:
                 gr.HTML(shared.html("licenses.html"), elem_id="licenses")
 
             self.show_all_pages = gr.Button(value="Show all pages", elem_id="settings_show_all_pages")
-            self.show_one_page = gr.Button(value="Show only one page", elem_id="settings_show_one_page", visible=False)
+            # clicked from settings.js; gradio 6 does not mount visible=False, so mount CSS-hidden
+            self.show_one_page = gr.Button(value="Show only one page", elem_id="settings_show_one_page", visible=True, elem_classes=['webui-hidden-mounted'])
             self.show_one_page.click(lambda: None)
 
             self.search_input = gr.Textbox(value="", elem_id="settings_search", max_lines=1, placeholder="Search...", show_label=False)

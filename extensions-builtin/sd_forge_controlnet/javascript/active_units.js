@@ -67,7 +67,9 @@
                 this.tab = tab;
                 this.tabOpen = false; // Whether the tab is open.
                 this.accordion = accordion;
-                this.isImg2Img = tab.querySelector('.cnet-mask-upload').id.includes('img2img');
+                // the mask-upload checkbox is visible=False (unmounted) in img2img, so
+                // reading its id threw and no img2img unit ever got wired
+                this.isImg2Img = !!tab.closest('#img2img_controlnet');
 
                 this.enabledAccordionCheckbox = tab.querySelector('.input-accordion-checkbox');
                 // the unit's enable is now the always-mounted InputAccordion bridge
@@ -199,11 +201,11 @@
                 unitHeader.appendChild(span);
             }
             getInputImageSrc() {
-                const img = this.inputImageGroup.querySelector('.cnet-image .forge-image');
+                const img = this.inputImageGroup?.querySelector('.cnet-image .forge-image');
                 return (img && img.src.startsWith('data')) ? img.src : null;
             }
             getPreprocessorPreviewImageSrc() {
-                const img = this.generatedImageGroup.querySelector('.cnet-image .forge-image');
+                const img = this.generatedImageGroup?.querySelector('.cnet-image .forge-image');
                 return (img && img.src.startsWith('data')) ? img.src : null;
             }
             getMaskImageSrc() {
@@ -224,11 +226,11 @@
                     }
                     return isPureBlack;
                 }
-                const maskImg = this.maskImageGroup.querySelector('.cnet-mask-image .forge-image');
+                const maskImg = this.maskImageGroup?.querySelector('.cnet-mask-image .forge-image');
                 // Hand-drawn mask on mask upload.
-                const handDrawnMaskCanvas = this.maskImageGroup.querySelector('.cnet-mask-image .forge-drawing-canvas');
+                const handDrawnMaskCanvas = this.maskImageGroup?.querySelector('.cnet-mask-image .forge-drawing-canvas');
                 // Hand-drawn mask on input image upload.
-                const inputImageHandDrawnMaskCanvas = this.inputImageGroup.querySelector('.cnet-image .forge-drawing-canvas');
+                const inputImageHandDrawnMaskCanvas = this.inputImageGroup?.querySelector('.cnet-image .forge-drawing-canvas');
                 if (!isEmptyCanvas(handDrawnMaskCanvas)) {
                     return handDrawnMaskCanvas.toDataURL();
                 } else if (maskImg && maskImg.src.startsWith('data')) {
@@ -293,21 +295,28 @@
 
             attachImageUploadListener() {
                 // Automatically check `enable` checkbox when image is uploaded.
-                this.inputImage.addEventListener('change', (event) => {
-                    if (!event.target.files) return;
-                    if (!this.enabledCheckbox.checked)
-                        this.enabledCheckbox.click();
-                });
+                // (no upload panel in img2img -- the unit uses the img2img image)
+                if (this.inputImage) {
+                    this.inputImage.addEventListener('change', (event) => {
+                        if (!event.target.files) return;
+                        if (!this.enabledCheckbox.checked)
+                            this.enabledCheckbox.click();
+                    });
+                }
 
                 // Automatically check `enable` checkbox when JSON pose file is uploaded.
-                this.tab.querySelector('.cnet-upload-pose input').addEventListener('change', (event) => {
-                    if (!event.target.files) return;
-                    if (!this.enabledCheckbox.checked)
-                        this.enabledCheckbox.click();
-                });
+                const poseUpload = this.tab.querySelector('.cnet-upload-pose input');
+                if (poseUpload) {
+                    poseUpload.addEventListener('change', (event) => {
+                        if (!event.target.files) return;
+                        if (!this.enabledCheckbox.checked)
+                            this.enabledCheckbox.click();
+                    });
+                }
             }
 
             attachImageStateChangeObserver() {
+                if (!this.inputImageContainer || !this.runPreprocessorButton) return; // img2img: no upload panel
                 new MutationObserver((mutationsList) => {
                     const changeObserved = imgChangeObserved(mutationsList);
 

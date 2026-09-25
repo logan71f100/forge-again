@@ -16,10 +16,14 @@ function showModal(event) {
     lb.style.display = "flex";
     lb.focus();
 
+    // gradio 6 unmounts inactive panes and builds img2img lazily, so either
+    // pane can be null -- a missing pane counts as hidden instead of throwing
+    // (which used to abort showModal before stopPropagation).
+    const paneShown = (pane) => !!pane && pane.style.display != "none";
     const tabTxt2Img = gradioApp().getElementById("tab_txt2img");
     const tabImg2Img = gradioApp().getElementById("tab_img2img");
     // show the save button in modal only on txt2img or img2img tabs
-    if (tabTxt2Img.style.display != "none" || tabImg2Img.style.display != "none") {
+    if (paneShown(tabTxt2Img) || paneShown(tabImg2Img)) {
         gradioApp().getElementById("modal_save").style.display = "inline";
     } else {
         gradioApp().getElementById("modal_save").style.display = "none";
@@ -76,10 +80,11 @@ function saveImage() {
     const tabImg2Img = gradioApp().getElementById("tab_img2img");
     const saveTxt2Img = "save_txt2img";
     const saveImg2Img = "save_img2img";
-    if (tabTxt2Img.style.display != "none") {
-        gradioApp().getElementById(saveTxt2Img).click();
-    } else if (tabImg2Img.style.display != "none") {
-        gradioApp().getElementById(saveImg2Img).click();
+    const paneShown = (pane) => !!pane && pane.style.display != "none";
+    if (paneShown(tabTxt2Img)) {
+        gradioApp().getElementById(saveTxt2Img)?.click();
+    } else if (paneShown(tabImg2Img)) {
+        gradioApp().getElementById(saveImg2Img)?.click();
     } else {
         console.error("missing implementation for saving modal of this type");
     }

@@ -604,8 +604,10 @@ def create_ui():
                     refresh_available_extensions_button = gr.Button(value="Load from:", variant="primary")
                     extensions_index_url = os.environ.get('WEBUI_EXTENSIONS_INDEX', "https://raw.githubusercontent.com/AUTOMATIC1111/stable-diffusion-webui-extensions/master/index.json")
                     available_extensions_index = gr.Text(value=extensions_index_url, label="Extension index URL", container=False)
-                    extension_to_install = gr.Text(elem_id="extension_to_install", visible=False)
-                    install_extension_button = gr.Button(elem_id="install_extension_button", visible=False)
+                    # JS bridges (extensions.js writes the url and clicks the button): gradio 6
+                    # does not mount visible=False components, so mount them CSS-hidden instead
+                    extension_to_install = gr.Text(elem_id="extension_to_install", visible=True, elem_classes=['webui-hidden-mounted'])
+                    install_extension_button = gr.Button(elem_id="install_extension_button", visible=True, elem_classes=['webui-hidden-mounted'])
 
                 with gr.Row():
                     selected_tags = gr.CheckboxGroup(value=["ads", "localization", "installed"], label="Extension tags", choices=["script", "ads", "localization", "installed"], elem_classes=['compact-checkbox-group'])
@@ -694,7 +696,10 @@ def create_ui():
 
                 config_save_button.click(fn=save_config_state, inputs=[config_save_name], outputs=[config_states_list, config_states_info])
 
-                dummy_component = gr.State()
+                # carries the confirm() result from config_state_confirm_restore. It must NOT be a
+                # gr.State: gradio substitutes the session-stored value for stateful inputs, so the
+                # value the js function returned was dropped and every restore came back "Cancelled."
+                dummy_component = gr.Textbox(visible=False)
                 config_restore_button.click(fn=restore_config_state, _js="config_state_confirm_restore", inputs=[dummy_component, config_states_list, config_restore_type], outputs=[config_states_info])
 
                 config_states_list.change(

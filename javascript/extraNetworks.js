@@ -10,7 +10,7 @@ function toggleCss(key, css, enable) {
         document.head.removeChild(style);
     }
     if (style) {
-        style.innerHTML == '';
+        style.innerHTML = '';
         style.appendChild(document.createTextNode(css));
     }
 }
@@ -38,7 +38,9 @@ function setupExtraNetworksForTab(tabname) {
         if (textarea.dataset.enPromptWired) return;
         textarea.dataset.enPromptWired = '1';
 
-        if (!activePromptTextarea[tabname]) {
+        // a stored textarea that gradio 6 has since remounted is detached:
+        // writing into it is invisible, so replace it with the live one
+        if (!activePromptTextarea[tabname] || !activePromptTextarea[tabname].isConnected) {
             activePromptTextarea[tabname] = textarea;
         }
 
@@ -366,7 +368,9 @@ function cardClicked(tabname, textToAdd, textToAddNegative, allowNegativePrompt)
         updatePromptArea(textToAdd, gradioApp().querySelector("#" + tabname + "_prompt textarea"));
         updatePromptArea(textToAddNegative, gradioApp().querySelector("#" + tabname + "_neg_prompt textarea"), true);
     } else {
-        var textarea = allowNegativePrompt ? activePromptTextarea[tabname] : gradioApp().querySelector("#" + tabname + "_prompt textarea");
+        var active = activePromptTextarea[tabname];
+        if (active && !active.isConnected) active = null; // remounted since it was focused
+        var textarea = (allowNegativePrompt && active) ? active : gradioApp().querySelector("#" + tabname + "_prompt textarea");
         updatePromptArea(textToAdd, textarea);
     }
 }
@@ -558,7 +562,7 @@ function extraNetworksControlTreeViewOnClick(event, tabname, extra_networks_tabn
 }
 
 function clickLoraRefresh() {
-    const targets = ['txt2img_lora', 'txt2img_checkpoints', 'txt2img_textural_inversion', 'img2img_lora', 'img2img_checkpoints', 'img2img_textural_inversion'];
+    const targets = ['txt2img_lora', 'txt2img_checkpoints', 'txt2img_textual_inversion', 'img2img_lora', 'img2img_checkpoints', 'img2img_textual_inversion'];
     targets.forEach(function(t) {
         const tab = gradioApp().getElementById(t + '-button');
         if (tab && tab.getAttribute('aria-selected') == "true") {
@@ -628,7 +632,10 @@ function popup(contents) {
 
 var storedPopupIds = {};
 function popupId(id) {
-    if (!storedPopupIds[id]) {
+    // gradio 6 remounts tab contents: when a fresh node with this id exists,
+    // the cached one is dead. (A cached node that is merely detached because
+    // another popup cleared the popup container is still live -- keep it.)
+    if (!storedPopupIds[id] || (!storedPopupIds[id].isConnected && gradioApp().getElementById(id))) {
         storedPopupIds[id] = gradioApp().getElementById(id);
     }
 
@@ -765,7 +772,10 @@ function extraNetworksEditUserMetadata(event, tabname, extraPage) {
     var id = tabname + '_' + extraPage + '_edit_user_metadata';
 
     var editor = extraPageUserMetadataEditors[id];
-    if (!editor) {
+    // gradio 6 remounts tab contents: when a fresh node with this id exists,
+    // the cached editor points at dead nodes. (A cached box merely detached
+    // because another popup cleared the popup container is still live.)
+    if (!editor || !editor.page || (!editor.page.isConnected && gradioApp().getElementById(id))) {
         editor = {};
         editor.page = gradioApp().getElementById(id);
         editor.nameTextarea = gradioApp().querySelector("#" + id + "_name" + ' textarea');

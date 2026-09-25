@@ -181,7 +181,9 @@ function sendBackToReplacer() {
 
 
 function replacer_go_to_comp_tab() {
-    const tabs = document.querySelector('#tabs').querySelector('.tab-nav').querySelectorAll('button');
+    // gradio 6 renders the tab bar as .tab-wrapper with role=tab buttons (was .tab-nav > button)
+    const top = document.querySelector('#tabs');
+    const tabs = top.querySelectorAll(':scope > .tab-wrapper button[role="tab"], :scope > .tab-nav > button');
     for (let i = 0; i < tabs.length; i++) {
         if (tabs[i].textContent.trim() === "Comparison") {
             tabs[i].click();

@@ -107,7 +107,8 @@
                 const poseTextbox = generatedImageGroup.querySelector('.cnet-pose-json textarea');
                 const allowPreviewCheckbox = tab.querySelector('.cnet-allow-preview input');
 
-                if (!allowPreviewCheckbox.checked)
+                // unmounted in img2img (visible=False there)
+                if (allowPreviewCheckbox && !allowPreviewCheckbox.checked)
                     allowPreviewCheckbox.click();
 
                 // Only set href when download link exists and needs an update. `downloadLink`

@@ -29,7 +29,16 @@
             app.querySelectorAll(sel).forEach(function (p) { p.remove(); });
             if (typeof showSubmitButtons === 'function') {
                 app.querySelectorAll('button[id$="_generate"]').forEach(function (btn) {
-                    showSubmitButtons(btn.id.slice(0, -'_generate'.length), true);
+                    var tab = btn.id.slice(0, -'_generate'.length);
+                    if (!fullCleanup) {
+                        // A live (non-placeholder) bar means the run is still
+                        // going: one slow ping (GPU saturated) flips online
+                        // off and on, and this must not put Generate back and
+                        // hide Interrupt/Skip mid-run.
+                        var c = app.getElementById(tab + '_gallery_container');
+                        if (c && c.parentNode && c.parentNode.querySelector(':scope > .progressDiv')) return;
+                    }
+                    showSubmitButtons(tab, true);
                 });
             }
         } catch (e) { /* UI not ready */ }
@@ -180,6 +189,18 @@
             if (pane && pane.id) tab = pane.id.replace(/^tab_/, '');
         } catch (e) { /* no active pane */ }
         if (tab !== 'txt2img' && tab !== 'img2img') return;
+
+        // Only adopt a job THIS page submitted for THIS tab. The ping reports
+        // the server-global current task: on a shared server that is someone
+        // else's run, and in a single-user session it may be the other tab's
+        // (its pane is unmounted, so uiLooksGenerating() cannot see it) --
+        // adopting it hid Generate here and pulled the other tab's result into
+        // this gallery. submit() stores the id under {tab}_task_id and only
+        // removes it once the run's progress completes, so a reload or a lost
+        // progress bar still matches.
+        var mine = null;
+        try { mine = localStorage.getItem(tab + '_task_id'); } catch (e) { /* storage blocked */ }
+        if (mine !== task) return;
 
         var container = app.getElementById(tab + '_gallery_container');
         if (!container || !container.parentNode) return;

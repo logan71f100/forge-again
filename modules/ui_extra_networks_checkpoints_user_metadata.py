@@ -82,7 +82,7 @@ class CheckpointUserMetadataEditor(ui_extra_networks_user_metadata.UserMetadataE
 
         self.button_edit\
             .click(fn=self.put_values_into_components, inputs=[self.edit_name_input], outputs=viewed_components)\
-            .then(fn=lambda: gr.update(visible=True), inputs=[], outputs=[self.box])
+            .then(fn=None, _js=self.show_box_js(), inputs=[], outputs=[])
 
         edited_components = [
             self.edit_description,

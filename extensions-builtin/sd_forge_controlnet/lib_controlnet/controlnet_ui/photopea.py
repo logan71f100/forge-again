@@ -168,11 +168,13 @@ class Photopea(object):
         Returns:
             None
         """
+        # photopea.js feeds the edited image into this component's file input; gradio 6
+        # does not mount visible=False components, so mount it CSS-hidden instead
         output = gr.Image(
-            visible=False,
+            visible=True,
             source="upload",
             type="numpy",
-            elem_classes=[f"cnet-photopea-output"],
+            elem_classes=["cnet-photopea-output", "webui-hidden-mounted"],
         )
 
         output.upload(

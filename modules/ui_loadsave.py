@@ -4,7 +4,10 @@ import os
 import gradio as gr
 
 from modules import errors
-from modules.ui_components import ToolButton, InputAccordion
+# InputAccordion is a factory function; the instances are InputAccordionImpl. The type()
+# checks below never matched the function, so accordion states (Hires. fix, Refiner, ...)
+# were neither saved to nor applied from ui-config.json.
+from modules.ui_components import ToolButton, InputAccordionImpl as InputAccordion
 
 
 def radio_choices(comp):  # gradio 3.41 changes choices from list of values to list of pairs

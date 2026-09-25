@@ -408,11 +408,13 @@ class ControlNetUiGroup(object):
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_mask_upload_checkbox",
                 visible=not self.is_img2img,
             )
+            # ticked from photopea.js ("send to ControlNet"); gradio 6 does not mount
+            # visible=False components, so mount it CSS-hidden instead
             self.use_preview_as_input = gr.Checkbox(
                 label="Preview as Input",
                 value=False,
-                elem_classes=["cnet-preview-as-input"],
-                visible=False,
+                elem_classes=["cnet-preview-as-input", "webui-hidden-mounted"],
+                visible=True,
             )
 
         with gr.Row(elem_classes="controlnet_img2img_options"):

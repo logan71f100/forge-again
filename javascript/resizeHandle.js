@@ -182,6 +182,8 @@
         clearTimeout(resizeTimer);
 
         resizeTimer = setTimeout(function() {
+            // drop rows gradio 6 has unmounted (tab switch / lazy rebuild)
+            parents = parents.filter(p => p.isConnected);
             for (const parent of parents) {
                 afterResize(parent);
             }
@@ -202,4 +204,8 @@ function setupAllResizeHandles() {
 
 
 onUiLoaded(setupAllResizeHandles);
+// img2img and the extras/pnginfo rows are built lazily, and gradio 6 remounts
+// a tab's children on tab switches, so rows appear (and reappear without their
+// handle) long after load. setup() is idempotent per row.
+onAfterUiUpdate(setupAllResizeHandles);
 

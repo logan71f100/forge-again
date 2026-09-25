@@ -34,7 +34,8 @@ def save_style(name, prompt, negative_prompt):
 
 def delete_style(name):
     if name == "":
-        return
+        # cancelled confirm: three outputs are wired, returning None raised a gradio error toast
+        return gr.update(), gr.update(), gr.update()
 
     shared.prompt_styles.styles.pop(name, None)
     shared.prompt_styles.save_styles()

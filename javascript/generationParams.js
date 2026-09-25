@@ -2,10 +2,12 @@
 
 let txt2img_gallery, img2img_gallery, modal = undefined;
 onAfterUiUpdate(function() {
-    if (!txt2img_gallery) {
+    // gradio 6 remounts a tab's children on tab switches: a cached gallery
+    // node goes stale (detached, listeners gone), so re-attach when it is
+    if (!txt2img_gallery || !txt2img_gallery.isConnected) {
         txt2img_gallery = attachGalleryListeners("txt2img");
     }
-    if (!img2img_gallery) {
+    if (!img2img_gallery || !img2img_gallery.isConnected) {
         img2img_gallery = attachGalleryListeners("img2img");
     }
     if (!modal) {

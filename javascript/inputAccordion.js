@@ -1,5 +1,8 @@
 function inputAccordionChecked(id, checked) {
     var accordion = gradioApp().getElementById(id);
+    // a server-driven value change (paste params, restore session) can land
+    // before setupAccordion ran, or target an accordion in an unmounted pane
+    if (!accordion || !accordion.visibleCheckbox) return;
     accordion.visibleCheckbox.checked = checked;
     accordion.onVisibleCheckboxChange();
 }

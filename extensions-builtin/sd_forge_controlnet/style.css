@@ -1,6 +1,6 @@
 /* InputAccordion alignment */
-/* Flex container */
-.controlnet .svelte-vt1mxs {
+/* Flex container (the units' gr.Row; hashed svelte classes change per gradio release) */
+.controlnet .accordions {
     display: flex;
     flex-wrap: wrap;
     flex-direction: row;

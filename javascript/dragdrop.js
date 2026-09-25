@@ -47,9 +47,12 @@ function isURL(url) {
 }
 
 function dragDropTargetIsPrompt(target) {
-    if (target?.placeholder && target?.placeholder.indexOf("Prompt") >= 0) return true;
-    if (target?.parentNode?.parentNode?.className?.indexOf("prompt") > 0) return true;
-    return false;
+    if (!target || target.tagName !== 'TEXTAREA') return false;
+    if (target.placeholder && target.placeholder.indexOf("Prompt") >= 0) return true;
+    // the negative prompt's placeholder says "Negative prompt" (lower-case p), and
+    // gradio 6 puts a div.input-container between the textarea and its label, so
+    // the old grandparent-className check no longer reached the `.prompt` block
+    return !!(target.closest && target.closest('.prompt'));
 }
 
 window.document.addEventListener('dragover', e => {
@@ -77,9 +80,11 @@ window.document.addEventListener('drop', async e => {
         let prompt_image_target = isImg2img ? "img2img_prompt_image" : "txt2img_prompt_image";
 
         const imgParent = gradioApp().getElementById(prompt_image_target);
+        if (!imgParent) return; // hidden file component not mounted
         const files = e.dataTransfer.files;
         const fileInput = imgParent.querySelector('input[type="file"]');
-        if (eventHasFiles(e) && fileInput) {
+        if (!fileInput) return;
+        if (eventHasFiles(e)) {
             fileInput.files = files;
             fileInput.dispatchEvent(new Event('change'));
         } else if (url) {
