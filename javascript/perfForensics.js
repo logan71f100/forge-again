@@ -249,7 +249,7 @@
             var roots = document.querySelectorAll('[id^="tab_"]');
             for (var k = 0; k < roots.length; k++) if (!/-button$/.test(roots[k].id)) mounted.push(roots[k].id.slice(4));
             var heap = (performance.memory && performance.memory.usedJSHeapSize) ? ' heap=' + Math.round(performance.memory.usedJSHeapSize / 1048576) + 'MB' : '';
-            log('health dom=' + domSize() + ' imgs=' + imgs.length + ' dataUriImgs=' + dataImgs + ' (' + Math.round(dataBytes / 1024) + 'KB)' +
+            log('health dom=' + document.getElementsByTagName('*').length + ' imgs=' + imgs.length + ' dataUriImgs=' + dataImgs + ' (' + Math.round(dataBytes / 1024) + 'KB)' +
                 ' textareaChars=' + Math.round(taBytes / 1024) + 'K listeners=' + wrapCount + ' styleTags=' + document.querySelectorAll('style').length +
                 ' mounted=' + mounted.join(',') + heap + ' uptime=' + Math.round(performance.now() / 60000) + 'min');
         } catch (e) { /* diagnostics never throw */ }

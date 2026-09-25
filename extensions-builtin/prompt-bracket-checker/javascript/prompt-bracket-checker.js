@@ -31,12 +31,23 @@ function setupBracketChecking(id_prompt, id_counter) {
     var textarea = gradioApp().querySelector("#" + id_prompt + " textarea");
     var counter = gradioApp().getElementById(id_counter);
 
-    if (textarea && counter) {
-        textarea.addEventListener("input", () => checkBrackets(textarea, counter));
-    }
+    if (!textarea || !counter) return;   // lazy tab (img2img) not mounted yet
+    if (textarea.dataset.bracketChecker) return; // already wired this element
+    textarea.dataset.bracketChecker = '1';
+
+    // look the counter up on each keystroke: gradio 6 can remount a tab's
+    // children on tab switches, which would leave a captured element stale
+    textarea.addEventListener("input", function() {
+        var elt = gradioApp().getElementById(id_counter);
+        if (elt) checkBrackets(textarea, elt);
+    });
+    checkBrackets(textarea, counter);
 }
 
-onUiLoaded(function() {
+// img2img is built lazily and gradio 6 remounts tab contents, so the prompt
+// boxes can appear (or be replaced) at any time after load. Re-run on every
+// UI update; setupBracketChecking no-ops once a textarea is wired.
+onAfterUiUpdate(function() {
     setupBracketChecking('txt2img_prompt', 'txt2img_token_counter');
     setupBracketChecking('txt2img_neg_prompt', 'txt2img_negative_token_counter');
     setupBracketChecking('img2img_prompt', 'img2img_token_counter');

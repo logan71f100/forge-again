@@ -87,14 +87,17 @@ function setupExtraNetworksForTab(tabname) {
             var searchTerm = search.value.toLowerCase();
 
             // get UI preset
-            radioUI = gradioApp().querySelector('#forge_ui_preset');
-            radioButtons = radioUI.getElementsByTagName('input');
-            UIresult = 3;   //  default to 'all'
-            for (i = 0; i < radioButtons.length; i++) {
+            var radioUI = gradioApp().querySelector('#forge_ui_preset');
+            var radioButtons = radioUI ? radioUI.querySelectorAll('input[type=radio]') : [];
+            var UIresult = 3;   //  default to 'all'
+            for (var i = 0; i < radioButtons.length; i++) {
                 if (radioButtons[i].checked) {
                     UIresult = i;
                 }
             }
+            // opts is loaded from the server after the page; until then (and
+            // whenever the option is off) the version filter is active.
+            var filterDisabled = !!(window.opts && opts.lora_filter_disabled);
 
             gradioApp().querySelectorAll('#' + tabname + '_extra_tabs div.card').forEach(function(elem) {
                 var searchOnly = elem.querySelector('.search_only');
@@ -105,15 +108,15 @@ function setupExtraNetworksForTab(tabname) {
                 var visible = true;
                 if (searchOnly && searchTerm.length < 4)    visible = false;
 
-                splitSearch = searchTerm.split(" ");
+                var splitSearch = searchTerm.split(" ");
                 splitSearch.forEach(function(partial) {
                     if (text.indexOf(partial) == -1)        visible = false;
-                })
+                });
 
-                sdversion = elem.getAttribute('data-sort-sdversion');
+                var sdversion = elem.getAttribute('data-sort-sdversion');
                 if (sdversion == null) ;
                 else if (sdversion == 'SdVersion.Unknown')  ;
-                else if (opts.lora_filter_disabled == True) ;
+                else if (filterDisabled) ;
                 else if (UIresult == 3) ;   //  'all'
                 else if (UIresult == 0) {   //  'sd'
                     if (sdversion != 'SdVersion.SD1' && sdversion != 'SdVersion.SD2')   visible = false;
@@ -133,7 +136,7 @@ function setupExtraNetworksForTab(tabname) {
                 // hidden outside that mode. Root-level cards always show, and a
                 // search that explicitly names a mode dir (typed, or the folder
                 // buttons) overrides the filter so other modes stay reachable.
-                if (visible && UIresult != 3 && !(opts.lora_filter_disabled == True)) {
+                if (visible && UIresult != 3 && !filterDisabled) {
                     // paths in search_terms use OS separators (Lora\flux\... on
                     // Windows) -- accept both slashes around the mode dir
                     var searchNamesModeDir = /(?:^|[\s\\/])(sd|xl|flux)[\\/]/.test(searchTerm);
@@ -143,7 +146,7 @@ function setupExtraNetworksForTab(tabname) {
                         if (cardModeMatch && cardModeMatch[1] !== presetName) visible = false;
                     }
                 }
-                
+
                 if (visible) {
                     elem.classList.remove("hidden");
                 } else {

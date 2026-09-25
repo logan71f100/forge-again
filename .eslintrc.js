@@ -50,6 +50,7 @@ module.exports = {
     globals: {
         //script.js
         gradioApp: "readonly",
+        get_uiCurrentTabContent: "readonly",
         executeCallbacks: "readonly",
         onAfterUiUpdate: "readonly",
         onOptionsChanged: "readonly",
@@ -75,6 +76,11 @@ module.exports = {
         restart_reload: "readonly",
         updateInput: "readonly",
         onEdit: "readonly",
+        showSubmitButtons: "readonly",
+        // forgeTimer.js
+        forgeTimer: "readonly",
+        // forgeNotify.js
+        forgeNotify: "readonly",
         //extraNetworks.js
         requestGet: "readonly",
         popup: "readonly",
