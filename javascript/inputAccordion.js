@@ -62,7 +62,13 @@ function setupAccordion(accordion) {
 
     var visibleCheckbox = document.createElement('INPUT');
     visibleCheckbox.type = 'checkbox';
-    visibleCheckbox.checked = linked ? isOpen() : gradioCheckbox.checked;
+    // The real gradio checkbox is the source of truth, not the open state. A
+    // server-driven value (mode defaults pushed on page load, pasted params, a
+    // restored session) can land BEFORE this setup runs, and
+    // inputAccordionChecked() bails out then because there is no mirror yet --
+    // so initializing a linked accordion from isOpen() showed the feature OFF
+    // (closed, unticked) while it actually ran ON. Reconciled at the end.
+    visibleCheckbox.checked = gradioCheckbox.checked;
     visibleCheckbox.id = accordion.id + "-visible-checkbox";
     visibleCheckbox.className = gradioCheckbox.className + " input-accordion-checkbox";
     span.insertBefore(visibleCheckbox, span.firstChild);
@@ -87,6 +93,14 @@ function setupAccordion(accordion) {
         event.stopPropagation();
     });
     visibleCheckbox.addEventListener('input', accordion.onVisibleCheckboxChange);
+
+    // A linked accordion shows its value by being open. If the value was set
+    // before setup (see above), open or close it to match; the observer then
+    // re-syncs the mirror, and onVisibleCheckboxChange finds the real checkbox
+    // already agreeing, so this never clicks it (never changes the value).
+    if (linked && isOpen() != gradioCheckbox.checked) {
+        labelWrap.click();
+    }
     return true;
 }
 
