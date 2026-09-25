@@ -392,8 +392,12 @@ class IntegratedFluxTransformer2DModel(nn.Module):
         # and if its residual barely moved since the last computed step reuse
         # the cached residual of every remaining block. Flow timesteps run
         # 1 -> 0, so progress through the run is 1 - t.
-        t_key = float(timesteps.flatten()[0])
-        cache_key = first_block_cache.begin_call(progress=1.0 - t_key, t_key=t_key)
+        # float() on a CUDA tensor is a device sync -- do it only when the cache
+        # is on, so the default path does not stall the CPU on every forward.
+        cache_key = None
+        if first_block_cache.enabled:
+            t_key = float(timesteps.flatten()[0])
+            cache_key = first_block_cache.begin_call(progress=1.0 - t_key, t_key=t_key)
         img_before = img
         img, txt = self.double_blocks[0](img=img, txt=txt, vec=vec, pe=pe)
         use_cache = cache_key is not None and first_block_cache.should_use_cache(cache_key, img - img_before)

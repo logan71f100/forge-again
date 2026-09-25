@@ -569,11 +569,19 @@ def check_unit_tests() -> None:
     protocol and the ported solvers. They need torch, so they skip on a box
     without the venv; tier 1 stays stdlib-only otherwise."""
     name = "unit: first block cache + samplers"
-    probe = run([sys.executable, "-c", "import torch, diffusers, gguf, psutil"])
+    # Only what the unit tests import. gguf used to be in this probe, but Forge
+    # vendors it in packages_3rdparty/ -- never importable from a bare
+    # interpreter -- so on every real install these tests silently SKIPPED.
+    probe = run([sys.executable, "-c", "import torch"])
     if probe.returncode != 0:
         record(name, SKIP, "torch stack not importable here (run from the venv)")
         return
-    r = run([sys.executable, "-m", "unittest", "discover", "-s", os.path.join(ROOT, "tests", "unit"), "-t", ROOT])
+    # Rooted IN tests/unit, so the modules import as top-level names. Rooted at
+    # ROOT they import as tests.unit.*, and any installed package that ships a
+    # top-level `tests` (ultralytics does) shadows the repo's and the whole
+    # discovery errors out. The test files put ROOT on sys.path themselves.
+    unit_dir = os.path.join(ROOT, "tests", "unit")
+    r = run([sys.executable, "-m", "unittest", "discover", "-s", unit_dir, "-t", unit_dir])
     tail = (r.stderr or r.stdout).strip().splitlines()
     summary = next((ln for ln in reversed(tail) if ln.startswith("Ran ")), "")
     if r.returncode == 0:
@@ -1763,8 +1771,9 @@ def check_ui_regression() -> None:
                 page.wait_for_timeout(3500)
                 n_disabled = page.evaluate("""() => {
                     const root = document.querySelector('#tab_img2img') || document;
-                    return root.querySelectorAll(
-                        'input:disabled, select:disabled, textarea:disabled, label.disabled').length;
+                    return [...root.querySelectorAll(
+                        'input:disabled, select:disabled, textarea:disabled, label.disabled')]
+                        .filter(el => !el.closest('.webui-hidden-mounted')).length;
                 }""")
                 if n_disabled:
                     record("ui: lazy tab controls are interactive", FAIL,
@@ -2150,8 +2159,9 @@ def check_ui_regression() -> None:
                     page.wait_for_timeout(3500)
                     nd = page.evaluate(
                         "(sel) => { const r = document.querySelector(sel); if (!r) return -1;"
-                        " return r.querySelectorAll('input:disabled, select:disabled, textarea:disabled,"
-                        " button:disabled, [role=listbox][aria-disabled=true]').length; }", _tab)
+                        " return [...r.querySelectorAll('input:disabled, select:disabled, textarea:disabled,"
+                        " button:disabled, [role=listbox][aria-disabled=true]')]"
+                        ".filter(el => !el.closest('.webui-hidden-mounted')).length; }", _tab)
                     if nd < 0:
                         record(f"ui: {_label} controls interactive", FAIL, f"{_tab} not found")
                     elif nd:

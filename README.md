@@ -150,7 +150,7 @@ All off by default — add them via `extra-args.txt` / `FORGE_EXTRA_ARGS` if you
 
 | argument | effect |
 |---|---|
-| `--cudnn-benchmark` | let cuDNN autotune conv kernels. Faster when you generate at the same resolution repeatedly; adds a small one-time cost each time the resolution changes. |
+| `--cudnn-benchmark` | let cuDNN autotune conv kernels. Faster when you generate at the same resolution repeatedly; each new resolution re-runs the autotune, and on a card running near full VRAM those trials can spill into system RAM and stall a VAE decode for minutes -- leave it off if you change sizes often (see [docs/performance.md](docs/performance.md)). |
 | `--tf32` | TF32 matmul/conv math on RTX 30xx (Ampere) and newer — a solid speedup for a tiny, normally invisible precision loss. Ignored (with a note) on older GPUs. |
 | `--use-sage-attention` | route attention through [SageAttention](https://github.com/thu-ml/SageAttention) (quantized attention kernels) if you've installed it into the venv (`pip install sageattention`). Falls back to PyTorch attention if it isn't installed or a mask is required. |
 

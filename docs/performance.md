@@ -32,9 +32,12 @@ residual is reused. This is the TeaCache / WaveSpeed "FBCache" scheme that
 ComfyUI (EasyCache), Forge Classic (sd-forge-blockcache) and reForge users run.
 
 - Published numbers: SDXL 896x1152 on a 3060, 45 s -> 35 s (FBCache) or 25 s
-  (TeaCache); Flux 1.5-2x at threshold 0.12. Expect the low end of that on a
-  card that also swaps weights, because a skipped block is also a skipped
-  swap-in.
+  (TeaCache); Flux 1.5-2x at threshold 0.12.
+- **Measured on the reference RTX 2080 Ti** (Chroma1-HD Q6_K GGUF, 1024x1024,
+  16 steps, CFG 1 with the flash-heun LoRA, start 0.15): threshold 0.12 ran
+  **1.37x faster** (5 of 16 forward passes skipped) and was visually
+  indistinguishable from the uncached image (mean pixel difference 3.66/255);
+  threshold 0.08 gave 1.20x at 2.06/255.
 - Threshold 0.05 is conservative, 0.12 the usual Flux default, 0.2+ trades
   visible detail. Start at 0.10-0.20 of the run keeps the composition steps
   exact. "Max consecutive skips" forces a full step after N cached ones if
@@ -74,7 +77,7 @@ Code: `extensions-builtin/sd_forge_cfg_zero_star`.
 
 | Flag | What | 2080 Ti | Ampere+ |
 |---|---|---|---|
-| `--cudnn-benchmark` | cuDNN autotunes conv algorithms for the shapes it sees; costs a few seconds per new resolution | yes, if you keep the same size | yes |
+| `--cudnn-benchmark` | cuDNN autotunes conv algorithms for every new shape, trial-running each candidate -- including memory-hungry ones | **no**, if you change resolution or run near full VRAM: on the reference 2080 Ti the autotune trials spilled into system RAM and turned a VAE decode into a multi-minute stall, and the flag was removed for it | yes, if you keep the same size |
 | `--fast-fp16-accumulation` | fp16 matmuls accumulate in fp16 (`allow_fp16_accumulation`). ComfyUI measured +10-15 % on SD1.5/SDXL at batch 1, +25-33 % at batch 2+, on 3090/4090. Only fp16 models. | unverified on Turing, try it | yes |
 | `--tf32` | TF32 matmul/conv | no effect | yes |
 | `--use-sage-attention` | INT8 attention | not available (needs Triton for sm_75) | yes, 20-40 % on Flux, head dim 64/128 only |

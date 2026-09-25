@@ -713,9 +713,13 @@ class IntegratedUNet2DConditionModel(nn.Module, ConfigMixin):
         # block 1 (the first real stage); everything after it is cached.
         # Discrete timesteps count down from the model's max, so progress
         # through the run is 1 - t / t_max.
-        t_key = float(timesteps.flatten()[0])
-        t_max = float(getattr(self, "num_timesteps", 1000) - 1) or 1.0
-        cache_key = first_block_cache.begin_call(progress=1.0 - t_key / t_max, t_key=t_key)
+        # float() on a CUDA tensor is a device sync -- do it only when the cache
+        # is on, so the default path does not stall the CPU on every forward.
+        cache_key = None
+        if first_block_cache.enabled:
+            t_key = float(timesteps.flatten()[0])
+            t_max = float(getattr(self, "num_timesteps", 1000) - 1) or 1.0
+            cache_key = first_block_cache.begin_call(progress=1.0 - t_key / t_max, t_key=t_key)
         use_cache = False
         h_before_first = None
 
