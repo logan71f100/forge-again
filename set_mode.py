@@ -12,9 +12,9 @@ FLUX_MODS = [
 ]
 # model + main-tab (txt2img/img2img) optimized defaults
 MODELS = {
-    "sd":   {"ckpt": "epicrealism_pureEvolutionV5.safetensors",    "mods": [],        "W": 512,  "H": 512,  "cfg": 7.0, "dcfg": 3.5, "denoise": 0.5,  "hires_denoise": 0.4,  "steps": 28, "sampler": "DPM++ 2M",     "scheduler": "Karras", "infmem": 1025, "udtype": "",                      "mask_blur": 4, "inpaint_padding": 64},
-    "xl":   {"ckpt": "epicrealismXL_vxviiCrystalclear.safetensors", "mods": [],        "W": 1024, "H": 1024, "cfg": 6.0, "dcfg": 3.5, "denoise": 0.7,  "hires_denoise": 0.35, "steps": 30, "sampler": "DPM++ 2M SDE", "scheduler": "Karras", "infmem": 1025, "udtype": "",                      "mask_blur": 8, "inpaint_padding": 96},
-    "flux": {"ckpt": "fluxunchained-fill-full-Q6_K.gguf",           "mods": FLUX_MODS, "W": 1024, "H": 1024, "cfg": 1.0, "dcfg": 3.5, "denoise": 1.0,  "hires_denoise": 0.3,  "steps": 25, "sampler": "Euler",        "scheduler": "Simple", "infmem": 3072, "udtype": "Automatic (fp16 LoRA)", "mask_blur": 8, "inpaint_padding": 96},
+    "sd":   {"ckpt": "epicrealism_pureEvolutionV5.safetensors",    "mods": [],        "W": 512,  "H": 512,  "cfg": 7.0, "dcfg": 3.5, "denoise": 0.5,  "hires_denoise": 0.4,  "steps": 28, "sampler": "DPM++ 2M",     "scheduler": "Karras", "infmem": 1025, "udtype": "",                      "mask_blur": 4, "inpaint_padding": 64, "fbc": False},
+    "xl":   {"ckpt": "epicrealismXL_vxviiCrystalclear.safetensors", "mods": [],        "W": 1024, "H": 1024, "cfg": 6.0, "dcfg": 3.5, "denoise": 0.7,  "hires_denoise": 0.35, "steps": 30, "sampler": "DPM++ 2M SDE", "scheduler": "Karras", "infmem": 1025, "udtype": "",                      "mask_blur": 8, "inpaint_padding": 96, "fbc": False},
+    "flux": {"ckpt": "fluxunchained-fill-full-Q6_K.gguf",           "mods": FLUX_MODS, "W": 1024, "H": 1024, "cfg": 1.0, "dcfg": 3.5, "denoise": 1.0,  "hires_denoise": 0.3,  "steps": 25, "sampler": "Euler",        "scheduler": "Simple", "infmem": 3072, "udtype": "Automatic (fp16 LoRA)", "mask_blur": 8, "inpaint_padding": 96, "fbc": True},
 }
 # Replacer optimized profile (read at UI build by the patched make_advanced_options.py / inpaint.py)
 REPLACER = {
@@ -23,6 +23,12 @@ REPLACER = {
     "flux": {"REPLACER_DEF_SAMPLER": "Euler",        "REPLACER_DEF_SCHEDULER": "Simple", "REPLACER_DEF_WIDTH": 1024, "REPLACER_DEF_HEIGHT": 1024, "REPLACER_DEF_STEPS": 25, "REPLACER_DEF_CFG": 1.0, "REPLACER_DEF_DENOISE": 1.0, "REPLACER_DEF_MASK_BLUR": 6, "REPLACER_DEF_PADDING": 48, "REPLACER_FLUX_GUIDANCE": 30},
 }
 COMMON = {"REPLACER_DEF_MASK_EXPAND": 15, "REPLACER_DEF_BOX_THRESHOLD": 0.35, "REPLACER_DEF_FILL": "original"}
+
+# First Block Cache defaults for modes where MODELS[mode]["fbc"] is on. The
+# title must match the extension's InputAccordion label exactly: ui-config keys
+# the accordion by it (extensions-builtin/sd_forge_first_block_cache).
+FBC_TITLE = "First Block Cache (faster sampling: SD, SDXL, Flux, Chroma)"
+FBC_DEFAULTS = {"threshold": 0.12, "start": 0.15}
 
 # Replacer quick-chip examples (newline-separated; clicking a chip REPLACES the field) -- per mode
 EXAMPLES = {
@@ -204,6 +210,17 @@ def write_mode_files(mode, here=None):
         # upscaler at low denoise keeps the composition and just adds detail.
         u["txt2img/Denoising strength/value"] = m["hires_denoise"]
         u["txt2img/Upscaler/value"] = _hires_upscaler()
+        # First Block Cache: on by default where it has been verified on the
+        # reference card (Flux/Chroma, Euler and Heun), off elsewhere. The
+        # extension's own default is off, and ui-config records whatever value
+        # a control was first built with -- so without writing it here a code
+        # default would never reach an existing install. main_entry pushes the
+        # same flag live on a mode switch and on page load.
+        for tab in ("txt2img", "img2img"):
+            base = f"customscript/forge_first_block_cache.py/{tab}"
+            u[f"{base}/{FBC_TITLE}/value"] = m["fbc"]
+            u[f"{base}/Residual difference threshold/value"] = FBC_DEFAULTS["threshold"]
+            u[f"{base}/Start (fraction of the run)/value"] = FBC_DEFAULTS["start"]
         u = {k: v for k, v in u.items() if not k.startswith("Replacer/")}
         json.dump(u, open(up, "w", encoding="utf-8"), indent=4)
 

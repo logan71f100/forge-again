@@ -936,6 +936,25 @@ class ServerSession:
                 data["sd_model_checkpoint"] = candidates[0]
 
         json.dump(data, open(settings, "w", encoding="utf-8"), indent=4)
+
+        # Build the First Block Cache accordion with the OPPOSITE of what this
+        # session's mode pushes on page load, so "ui: input accordions show
+        # their real value" always sees a server-pushed value that differs from
+        # the built one -- the case inputAccordion.js used to lose. Unseeded, a
+        # mode that builds and pushes the same value never exercises the race.
+        # The fixture carries no forge_preset unless the flux branch above set
+        # one, so the server falls back to the option default, 'sd'.
+        try:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location("forge_set_mode_seed", os.path.join(ROOT, "set_mode.py"))
+            _sm = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_sm)
+            _pushed = bool(_sm.MODELS.get(data.get("forge_preset", "sd"), {}).get("fbc", False))
+            _key = f"customscript/forge_first_block_cache.py/txt2img/{_sm.FBC_TITLE}/value"
+            json.dump({_key: not _pushed}, open(os.path.join(self.tmp, "ui-config.json"), "w", encoding="utf-8"), indent=4)
+        except Exception:
+            pass   # best-effort: the check still runs, just without a forced mismatch
+
         env = dict(os.environ)
         env.update(FORGE_NO_LLM="1", SD_WEBUI_RESTARTING="1", PYTHONUNBUFFERED="1",
                    # Only config.json was being isolated. The UI tier opens
@@ -1760,6 +1779,41 @@ def check_ui_regression() -> None:
                            "checkbox did not change state when clicked (stuck control)")
             except Exception as e:
                 record("ui: hires-fix accordion toggles", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
+
+            # --- input accordions show their real value -----------------------
+            # A value the server sets before inputAccordion.js builds the visible
+            # mirror (mode defaults pushed on page load, pasted params, a
+            # restored session) used to be lost: the mirror was initialized from
+            # the accordion's open state, so e.g. First Block Cache ran ON while
+            # its box showed OFF. After load, every LINKED accordion's real
+            # value, visible checkbox and open state must agree. (Unlinked ones
+            # -- ControlNet units -- open independently of their value by design.)
+            try:
+                page.wait_for_timeout(1500)
+                bad = page.evaluate("""() => {
+                    const out = [];
+                    for (const acc of document.querySelectorAll('#tab_txt2img .input-accordion[data-ia-setup]')) {
+                        const block = document.getElementById(acc.id + '-checkbox');
+                        if (block && block.classList.contains('input-accordion-unlinked')) continue;
+                        const real = block && block.querySelector('input');
+                        const mirror = document.getElementById(acc.id + '-visible-checkbox');
+                        const wrap = acc.querySelector('.label-wrap');
+                        if (!real || !mirror || !wrap) continue;
+                        const open = wrap.classList.contains('open');
+                        if (real.checked !== mirror.checked || real.checked !== open)
+                            out.push(acc.id + ' real=' + real.checked + ' shown=' + mirror.checked + ' open=' + open);
+                    }
+                    return out;
+                }""")
+                n = page.evaluate("() => document.querySelectorAll('#tab_txt2img .input-accordion[data-ia-setup]').length")
+                if bad:
+                    record("ui: input accordions show their real value", FAIL, "; ".join(bad)[:300])
+                elif not n:
+                    record("ui: input accordions show their real value", FAIL, "no input accordion was set up")
+                else:
+                    record("ui: input accordions show their real value", PASS, f"{n} accordion(s) in sync")
+            except Exception as e:
+                record("ui: input accordions show their real value", FAIL, f"{type(e).__name__}: {str(e)[:160]}")
 
             # --- lazy tabs must not render disabled ---------------------------
             # gradio infers `interactive` from event wiring, which a gr.render

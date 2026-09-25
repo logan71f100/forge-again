@@ -323,6 +323,24 @@ def get_a1111_ui_component(tab, label):
             return f.component
 
 
+def _first_block_cache_accordions():
+    """The First Block Cache "enabled" accordion for [txt2img, img2img], or None
+    for a tab whose scripts are not built yet (lazy img2img) or when the
+    extension is absent. It is the script's first control, so inputs[args_from]."""
+    from modules import scripts
+    found = []
+    for runner in (getattr(scripts, 'scripts_txt2img', None), getattr(scripts, 'scripts_img2img', None)):
+        comp = None
+        inputs = getattr(runner, 'inputs', None) or []
+        for s in getattr(runner, 'alwayson_scripts', None) or []:
+            if os.path.basename(getattr(s, 'filename', '') or '') == 'forge_first_block_cache.py':
+                if s.args_from is not None and s.args_from < len(inputs):
+                    comp = inputs[s.args_from]
+                break
+        found.append(comp)
+    return found
+
+
 def forge_main_entry():
     ui_txt2img_width = get_a1111_ui_component('txt2img', 'Size-1')
     ui_txt2img_height = get_a1111_ui_component('txt2img', 'Size-2')
@@ -364,6 +382,14 @@ def forge_main_entry():
         ui_txt2img_hr_distilled_cfg,
     ]
 
+    # First Block Cache follows the mode like the controls above: on for flux,
+    # off for sd/xl (set_mode.MODELS[mode]["fbc"]). Appended AFTER the fixed
+    # list so on_preset_change's positional returns stay aligned; a lazily
+    # built img2img accordion is None here and filtered out below, picking up
+    # the same default from ui-config when it is built.
+    fbc_targets = _first_block_cache_accordions()
+    output_targets += fbc_targets
+
     # LAZY IMG2IMG: when the img2img tab body is deferred (built via gr.render only on first tab
     # select), its 6 components above (ui_img2img_width/height/cfg/distilled_cfg/sampler/scheduler)
     # do not exist yet at UI-build time, so get_a1111_ui_component('img2img', ...) returns None.
@@ -379,6 +405,8 @@ def forge_main_entry():
         full = on_preset_change(preset)
         if full is None:
             return None
+        fbc_on = bool(_load_set_mode().MODELS.get(shared.opts.forge_preset, {}).get("fbc", False))
+        full = list(full) + [gr.update(value=fbc_on) for _ in fbc_targets]
         return [full[i] for i in _valid_target_idx]
 
     # IN-PLACE mode switch (no restart, no page reload). Handlers on the same
