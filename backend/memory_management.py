@@ -284,12 +284,24 @@ if args.tf32:
     except Exception as e:
         print(f"Could not enable TF32: {e}")
 
-if args.fast_fp16_accumulation:
+# fp16 accumulation: explicit flag wins either way; with neither flag it is ON
+# for NVIDIA CUDA only (see backend/args.py for the measurements). ROCm reports
+# torch.version.hip and is left off -- the flag maps to a different BLAS there.
+_fp16_accum = args.fast_fp16_accumulation
+_fp16_accum_auto = _fp16_accum is None
+if _fp16_accum_auto:
+    try:
+        _fp16_accum = bool(torch.cuda.is_available() and getattr(torch.version, "hip", None) is None)
+    except Exception:
+        _fp16_accum = False
+
+if _fp16_accum:
     try:
         if hasattr(torch.backends.cuda.matmul, "allow_fp16_accumulation"):
             torch.backends.cuda.matmul.allow_fp16_accumulation = True
-            print("Enabled fp16 accumulation for fp16 matmuls (--fast-fp16-accumulation).")
-        else:
+            print("Enabled fp16 accumulation for fp16 matmuls (%s; --no-fast-fp16-accumulation to turn it off)."
+                  % ("default on NVIDIA" if _fp16_accum_auto else "--fast-fp16-accumulation"))
+        elif not _fp16_accum_auto:
             print("--fast-fp16-accumulation requested but this torch build has no allow_fp16_accumulation flag (needs torch >= 2.7).")
     except Exception as e:
         print(f"Could not enable fp16 accumulation: {e}")

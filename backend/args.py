@@ -69,11 +69,16 @@ parser.add_argument("--tf32", action="store_true")
 parser.add_argument("--use-sage-attention", action="store_true")
 #   --fast-fp16-accumulation lets fp16 matmuls accumulate in fp16 instead of
 #                        fp32 (torch.backends.cuda.matmul.allow_fp16_accumulation,
-#                        torch >= 2.7). ComfyUI's `--fast fp16_accumulation`:
-#                        +10-15% on fp16 UNets (SD1.5/SDXL) on Ampere and newer
-#                        at batch 1, more at larger batches; no effect on bf16 or
-#                        fp8 models. Slight precision loss; keep it opt-in.
-parser.add_argument("--fast-fp16-accumulation", action="store_true")
+#                        torch >= 2.7). ComfyUI's `--fast fp16_accumulation`.
+#                        ON BY DEFAULT on NVIDIA CUDA: measured on the reference
+#                        RTX 2080 Ti (Turing) at +15% on Chroma (GGUF dequantizes
+#                        to fp16 there) and +13-15% on SDXL, with no visible
+#                        change at 1:1 up to 1304x2048 and no NaNs; it stacks
+#                        with First Block Cache (Chroma 1.71x together). Off on
+#                        ROCm (maps to a different BLAS, unverified), MPS and
+#                        CPU. --no-fast-fp16-accumulation opts out; neither
+#                        flag = the automatic choice above.
+parser.add_argument("--fast-fp16-accumulation", action=argparse.BooleanOptionalAction, default=None)
 
 # --vram-fraction  caps how much of the card THIS process may reserve, as a
 #                  fraction of total VRAM. The point is NOT to save memory, it is

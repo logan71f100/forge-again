@@ -10,8 +10,8 @@ machine.
 
 | GPU | Arch | Has | Does not have |
 |---|---|---|---|
-| **RTX 2080 Ti** (11 GB) | Turing, sm_75 | fp16 tensor cores, int8 | bf16 (emulated, slow), TF32, flash SDPA, fp8, Triton (dropped after 3.2, so no `torch.compile` and no SageAttention 2) |
-| RTX 3060/3080/3090 | Ampere, sm_80/86 | + bf16, TF32, flash SDPA, cuDNN SDPA, SageAttention 2, fp16 accumulation, Triton | fp8 matmul |
+| **RTX 2080 Ti** (11 GB) | Turing, sm_75 | fp16 tensor cores, int8, fp16 accumulation (measured +15 %) | bf16 (emulated, slow), TF32, flash SDPA, fp8, Triton (dropped after 3.2, so no `torch.compile` and no SageAttention 2) |
+| RTX 3060/3080/3090 | Ampere, sm_80/86 | + bf16, TF32, flash SDPA, cuDNN SDPA, SageAttention 2, Triton | fp8 matmul |
 | RTX 4070-4090 | Ada, sm_89 | + fp8 `_scaled_mm`, SageAttention 2++ | NVFP4 |
 | RTX 50xx | Blackwell, sm_120 | + NVFP4, SageAttention 3 | needs a cu130 torch build (cu126 has no Blackwell SASS) |
 | AMD RDNA3/4 (ROCm 7.1) | gfx11xx/12xx | AOTriton flash SDPA (torch 2.13 stable), bf16 | fp8, SageAttention, Nunchaku |
@@ -37,7 +37,16 @@ ComfyUI (EasyCache), Forge Classic (sd-forge-blockcache) and reForge users run.
   16 steps, CFG 1 with the flash-heun LoRA, start 0.15): threshold 0.12 ran
   **1.37x faster** (5 of 16 forward passes skipped) and was visually
   indistinguishable from the uncached image (mean pixel difference 3.66/255);
-  threshold 0.08 gave 1.20x at 2.06/255.
+  threshold 0.08 gave 1.20x at 2.06/255. On the everyday Chroma setup (Heun,
+  20 steps, flash-heun LoRA, 896x1152) it was **1.52-1.59x** -- Heun's
+  corrector call lands close to its predictor, so 14 of 39 forwards skip.
+  **On by default in flux mode** (set_mode.py), off in sd and xl:
+- **Measured on SDXL and SD 1.5, and left off there.** JuggernautXL, DPM++ 2M
+  SDE, 30 steps: only 1.08-1.11x (2-3 of 30 skipped -- the SDE sampler's
+  per-step noise keeps the first stage from settling). SD 1.5 epicrealism,
+  28 steps: 1.15x, but with visible composition drift at 512x640, where the
+  latent is small (0.08: near-identical, 1.06x). Not worth the drift on
+  images that already take 2-11 s; enable per run if you want it.
 - Threshold 0.05 is conservative, 0.12 the usual Flux default, 0.2+ trades
   visible detail. Start at 0.10-0.20 of the run keeps the composition steps
   exact. "Max consecutive skips" forces a full step after N cached ones if
@@ -78,7 +87,7 @@ Code: `extensions-builtin/sd_forge_cfg_zero_star`.
 | Flag | What | 2080 Ti | Ampere+ |
 |---|---|---|---|
 | `--cudnn-benchmark` | cuDNN autotunes conv algorithms for every new shape, trial-running each candidate -- including memory-hungry ones | **no**, if you change resolution or run near full VRAM: on the reference 2080 Ti the autotune trials spilled into system RAM and turned a VAE decode into a multi-minute stall, and the flag was removed for it | yes, if you keep the same size |
-| `--fast-fp16-accumulation` | fp16 matmuls accumulate in fp16 (`allow_fp16_accumulation`). ComfyUI measured +10-15 % on SD1.5/SDXL at batch 1, +25-33 % at batch 2+, on 3090/4090. Only fp16 models. | unverified on Turing, try it | yes |
+| `--fast-fp16-accumulation` | fp16 matmuls accumulate in fp16 (`allow_fp16_accumulation`). **On by default on NVIDIA**; `--no-fast-fp16-accumulation` turns it off. ComfyUI measured +10-15 % on SD1.5/SDXL at batch 1, +25-33 % at batch 2+, on 3090/4090. Covers GGUF Flux/Chroma too, which dequantize to fp16 on Turing. | **yes -- measured +15 % on Chroma, +13-15 % on SDXL, ~5 % on SD 1.5**; no visible change at 1:1 up to 1304x2048, no NaNs; stacks with First Block Cache (Chroma 1.71x together) | yes |
 | `--tf32` | TF32 matmul/conv | no effect | yes |
 | `--use-sage-attention` | INT8 attention | not available (needs Triton for sm_75) | yes, 20-40 % on Flux, head dim 64/128 only |
 | `--cuda-stream` / `--pin-shared-memory` | Async weight swap on a second CUDA stream, pinned host memory. Also the **Swap Method = Async** and **Swap Location = Shared** radios at the top of the page. ComfyUI made both default in Dec 2025 and measured 10-50 % when weights must be offloaded; reForge reports 15-25 % on SDXL. | **yes** whenever the model does not fit (Flux) | yes |
