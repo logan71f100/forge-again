@@ -74,6 +74,7 @@
             // hold the submit: this is the one warning for this server launch
             ev.stopPropagation();
             ev.preventDefault();
+            window._forgeGenerateHeld = Date.now();              // the stall watchdog reads this
 
             var evals = steps * (/heun/i.test(sampler) ? 2 : 1) * (cfgTooHigh ? 2 : 1);
             var ratio = Math.max(1, Math.round(evals / 16));

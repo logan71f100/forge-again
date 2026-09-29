@@ -52,6 +52,12 @@
     // notice and offer a one-click retry instead of leaving the user stranded,
     // and record exactly which stage stalled for diagnosis.
     var pendingSubmits = {};
+    // Extensions hook the same Generate click with events of their own, which
+    // join the queue and start too. Only the generation's own join (its payload
+    // carries the task(...) id submit() made) counts as "joined", and the other
+    // events' ids are remembered so their process_starts do not count as the
+    // generation starting.
+    var otherEvents = {};
 
     function markSubmitJoined() {
         Object.keys(pendingSubmits).forEach(function (t) {
@@ -85,7 +91,47 @@
     function checkSubmitLanded(tab) {
         var s = pendingSubmits[tab];
         if (!s || s.started) { delete pendingSubmits[tab]; return; }
+        // Held on purpose by one of our own gates (the flash-LoRA dialog is
+        // waiting for an answer): not a stall, and that dialog is already up.
+        // (both click hooks run in the same dispatch, the dialog's first, so
+        // its stamp can precede s.t by a millisecond)
+        if (window._forgeGenerateHeld && window._forgeGenerateHeld >= s.t - 2000) {
+            slog('generate on ' + tab + ' held by the flash-LoRA dialog (not a stall)');
+            delete pendingSubmits[tab];
+            return;
+        }
         var stage = s.joined ? 'joined the queue but never started' : 'never reached the server (no queue join)';
+        // A visible tab, a click that never produced a queue join, and no canvas
+        // upload still in flight: gradio itself is wedged. Its client runs an
+        // input walk (handle_blob) before /queue/join with no .catch, so one
+        // throw there leaves the event "pending" forever -- and Generate uses
+        // trigger_mode "once", so every later click is SKIPPED without a
+        // sound. gradio also runs the events bound to one click in sequence,
+        // each to completion, so any of them hanging holds back the ones after
+        // it. submit() stamps _forgeSubmitAt (ui.js), which records whether
+        // gradio got as far as this tab's submit js. Retry cannot help (it
+        // would be skipped too); only a reload clears gradio's state.
+        var canvasBusy = !!(window._forgeCanvasPending && window._forgeCanvasPending.size);
+        if (!s.joined && !s.hidden && !document.hidden && !canvasBusy) {
+            var ran = !!(window._forgeSubmitAt && window._forgeSubmitAt[tab] >= s.t);
+            slog('SUBMIT STALLED on ' + tab + ': ' + stage + ' -- gradio is wedged (' +
+                 (ran ? 'submit js ran, then the client failed before the queue join'
+                      : 'gradio never ran the submit js for this click: an event it is still waiting on holds it') + ')');
+            shipLog();
+            delete pendingSubmits[tab];
+            if (typeof forgeNotify === 'undefined') return;
+            forgeNotify.warn('\u26a0 Generate is stuck in this page: an earlier submit failed before it reached ' +
+                'the server, and the page ignores new clicks until it is reloaded. Reload to fix it -- ' +
+                'saved defaults come back, but pasted values and images need to be sent again.', {
+                id: 'fa-submit-' + tab,
+                timeout: 0,
+                buttons: [
+                    { label: '\u21bb Reload page', primary: true, onClick: function () { location.reload(); } },
+                    { label: 'Dismiss', onClick: function () { } },
+                ],
+            });
+            return;
+        }
         slog('SUBMIT STALLED on ' + tab + ': ' + stage +
              ' (tab hidden at click: ' + s.hidden + ', still hidden: ' + document.hidden + ')');
         shipLog();
@@ -294,6 +340,31 @@
         if (forensicsOn()) console.log('[fa-stream] ' + line);
     }
 
+    // Uncaught errors and unhandled promise rejections. The wedged-submit case
+    // above is an unhandled rejection inside gradio's client that left no
+    // trace anywhere; with this the next one names the throw and its stack.
+    // Deduplicated and capped so a looping error cannot flood the log.
+    var seenErrors = {}, errorCount = 0;
+    function logUncaught(kind, err, fallback) {
+        try {
+            var msg = (err && (err.message || String(err))) || fallback || 'unknown';
+            var stack = (err && err.stack) ? String(err.stack).split('\n').slice(0, 6).join(' | ') : '';
+            var key = kind + msg;
+            if (seenErrors[key] || errorCount >= 30) return;
+            seenErrors[key] = true;
+            errorCount++;
+            slog('JS ' + kind + ': ' + msg.slice(0, 300) + (stack ? ' -- ' + stack.slice(0, 900) : ''));
+            shipLog();
+        } catch (e) { /* never throw from the error hook */ }
+    }
+    window.addEventListener('error', function (ev) {
+        if (!ev || (!ev.error && !ev.message)) return;           // resource load errors: not ours
+        logUncaught('ERROR', ev.error, ev.message + ' @ ' + (ev.filename || '?') + ':' + (ev.lineno || '?'));
+    });
+    window.addEventListener('unhandledrejection', function (ev) {
+        logUncaught('UNHANDLED REJECTION', ev && ev.reason, 'rejection without a reason');
+    });
+
     // Ship new log lines to the server (client-debug.log) so connection
     // problems can be diagnosed server-side. Piggybacks on the ping cadence.
     function shipLog() {
@@ -339,7 +410,7 @@
                             slog('event process_completed ' + summary);
                         } else if (msg !== 'progress' && msg !== 'estimation') {
                             if (msg === 'close_stream') state.sawClose = true;
-                            if (msg === 'process_starts') markSubmitStarted();
+                            if (msg === 'process_starts' && !(ev.event_id && otherEvents[ev.event_id])) markSubmitStarted();
                             slog('event ' + msg);
                         }
                     } catch (e3) { /* non-JSON data line */ }
@@ -380,9 +451,20 @@
         // from "the server refused/lost it" -- previously indistinguishable.
         if (url.indexOf('queue/join') !== -1) {
             var jt = Date.now();
+            var body = arguments[1] && arguments[1].body;
+            var isGeneration = typeof body === 'string' && body.indexOf('"task(') !== -1;
             return origFetch.apply(this, arguments).then(function (r) {
-                slog('queue JOIN -> HTTP ' + r.status + ' in ' + ((Date.now() - jt) / 1000).toFixed(2) + 's');
-                markSubmitJoined();
+                slog('queue JOIN -> HTTP ' + r.status + ' in ' + ((Date.now() - jt) / 1000).toFixed(2) + 's' +
+                     (isGeneration ? '' : ' (not a generation)'));
+                if (isGeneration) {
+                    markSubmitJoined();
+                } else {
+                    try {
+                        r.clone().json().then(function (j) {
+                            if (j && j.event_id) otherEvents[j.event_id] = true;
+                        }).catch(function () { });
+                    } catch (e) { /* body unreadable: its start just counts, as before */ }
+                }
                 shipLog();
                 return r;
             }, function (err) {

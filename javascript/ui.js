@@ -196,7 +196,13 @@ function showRestoreProgressButton(tabname, show) {
     button.style.setProperty('display', show ? 'flex' : 'none', 'important');
 }
 
+// When gradio last actually ran each tab's submit js. The stall watchdog
+// (connectionWatchdog.js) compares it with the click time: a Generate click
+// that never reaches this function was skipped inside gradio.
+window._forgeSubmitAt = window._forgeSubmitAt || {};
+
 function submit() {
+    window._forgeSubmitAt.txt2img = Date.now();
     showSubmitButtons('txt2img', false);
 
     var id = randomId();
@@ -224,6 +230,7 @@ function submit_txt2img_upscale() {
 }
 
 function submit_img2img() {
+    window._forgeSubmitAt.img2img = Date.now();
     showSubmitButtons('img2img', false);
 
     var id = randomId();
