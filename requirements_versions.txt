@@ -49,7 +49,7 @@ torchdiffeq==0.2.5
 torchsde==0.2.6
 transformers==5.14.1   # 5.x required: gradio 6 forces hub 1.x, which no transformers 4.x accepts
 httpx>=0.26
-pillow-avif-plugin==1.4.3
+pillow-avif-plugin==1.6.0
 diffusers==0.39.0
 # gradio_rangeslider has NO gradio-6 build — ControlNet Timestep Range gets
 # paired gr.Sliders (or a 6-native component) during the ControlNet port stage
