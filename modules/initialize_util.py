@@ -193,24 +193,25 @@ def configure_opts_onchange():
 
 
 def setup_middleware(app):
-    from starlette.middleware.gzip import GZipMiddleware
-
     from modules.gradio_frontend_patches import NoCachePatchedAssets
 
-    app.user_middleware.insert(0, starlette.middleware.Middleware(GZipMiddleware, minimum_size=1000))
-    # Patched gradio bundles must not be served from a stale browser cache.
-    # Starlette builds its middleware stack once, at lifespan startup -- before
-    # this runs on a launched app -- and build_middleware_stack() below only
-    # returns a new stack without installing it. So wrap the stack actually
-    # serving requests; insert into user_middleware only if none is built yet.
-    stack = getattr(app, "middleware_stack", None)
-    if stack is not None:
-        if not isinstance(stack, NoCachePatchedAssets):
-            app.middleware_stack = NoCachePatchedAssets(stack)
-    elif not any(m.cls is NoCachePatchedAssets for m in app.user_middleware):
+    # No GZipMiddleware: gradio's own BrotliMiddleware already compresses what
+    # it serves, and the GZip this used to add never ran (see below), so
+    # enabling it now would only put a new layer in front of the SSE stream.
+    if not any(m.cls is NoCachePatchedAssets for m in app.user_middleware):
+        # patched gradio bundles must not be served from a stale browser cache
         app.user_middleware.insert(0, starlette.middleware.Middleware(NoCachePatchedAssets))
     configure_cors_middleware(app)
-    app.build_middleware_stack()  # rebuild middleware stack on-the-fly
+
+    # Starlette builds its middleware stack ONCE, at lifespan startup -- which on
+    # a launched gradio app has already happened when this runs. The old
+    # `app.build_middleware_stack()` here built a new stack and threw it away,
+    # so none of these changes ever served a request: gradio's CORS policy
+    # (any origin, with credentials, for a non-localhost Host) stayed live and
+    # --cors-allow-origins was ignored. Install the rebuilt stack; an app that
+    # has not started yet builds it lazily from user_middleware.
+    if getattr(app, "middleware_stack", None) is not None:
+        app.middleware_stack = app.build_middleware_stack()
 
 
 def configure_cors_middleware(app):
@@ -227,5 +228,6 @@ def configure_cors_middleware(app):
     if cmd_opts.cors_allow_origins_regex:
         cors_options["allow_origin_regex"] = cmd_opts.cors_allow_origins_regex
 
+    app.user_middleware = [m for m in app.user_middleware if m.cls is not CORSMiddleware]   # idempotent
     app.user_middleware.insert(0, starlette.middleware.Middleware(CORSMiddleware, **cors_options))
 

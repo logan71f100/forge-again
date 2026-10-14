@@ -151,7 +151,9 @@ def webui_worker():
         # an attacker to trick the user into opening a malicious HTML page, which makes a request to the
         # running web ui and do whatever the attacker wants, including installing an extension and
         # running its code. We disable this here. Suggested by RyotaK.
-        app.user_middleware = [x for x in app.user_middleware if x.cls.__name__ != 'CORSMiddleware']
+        # gradio 6 names its class CustomCORSMiddleware: it reflects ANY origin, with credentials,
+        # whenever the Host header is not localhost -- i.e. on every --listen install reached by IP.
+        app.user_middleware = [x for x in app.user_middleware if x.cls.__name__ not in ('CORSMiddleware', 'CustomCORSMiddleware')]
 
         initialize_util.setup_middleware(app)
 
