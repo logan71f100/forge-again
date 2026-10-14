@@ -195,7 +195,20 @@ def configure_opts_onchange():
 def setup_middleware(app):
     from starlette.middleware.gzip import GZipMiddleware
 
+    from modules.gradio_frontend_patches import NoCachePatchedAssets
+
     app.user_middleware.insert(0, starlette.middleware.Middleware(GZipMiddleware, minimum_size=1000))
+    # Patched gradio bundles must not be served from a stale browser cache.
+    # Starlette builds its middleware stack once, at lifespan startup -- before
+    # this runs on a launched app -- and build_middleware_stack() below only
+    # returns a new stack without installing it. So wrap the stack actually
+    # serving requests; insert into user_middleware only if none is built yet.
+    stack = getattr(app, "middleware_stack", None)
+    if stack is not None:
+        if not isinstance(stack, NoCachePatchedAssets):
+            app.middleware_stack = NoCachePatchedAssets(stack)
+    elif not any(m.cls is NoCachePatchedAssets for m in app.user_middleware):
+        app.user_middleware.insert(0, starlette.middleware.Middleware(NoCachePatchedAssets))
     configure_cors_middleware(app)
     app.build_middleware_stack()  # rebuild middleware stack on-the-fly
 

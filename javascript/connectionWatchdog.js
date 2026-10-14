@@ -493,7 +493,10 @@
                                 // gradio aborts its own fetch after close_stream — normal teardown
                                 slog('queue stream ended (client abort after close_stream) after ' + secs() + 's');
                             } else {
-                                streamDied('DROPPED (' + (err && err.name || 'error') + ')', secs());
+                                // the message separates a network reset ("network error") from a
+                                // stream-state error inside the page ("Invalid state ...")
+                                streamDied('DROPPED (' + (err && err.name || 'error') +
+                                           (err && err.message ? ': ' + String(err.message).slice(0, 160) : '') + ')', secs());
                             }
                             shipLog();
                             controller.error(err);

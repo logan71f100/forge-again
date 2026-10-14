@@ -32,18 +32,32 @@ Python-side switch for it, so the bundle is patched on disk at launch:
     within 60 s of such a recovery (the session itself may be gone), the old
     reload happens after all.
 
+  * the shared event stream's onerror (client bundle). It tells the waiting
+    events the connection broke but leaves `stream_status.open` true, so
+    every later event assumes a stream is open, never opens one, and waits
+    forever -- gradio's page reload was what hid this. Without the fix the
+    page above survived but its next Generate wedged. Now a broken stream is
+    marked closed and the next event opens a fresh one.
+
 Patches are exact-substring replacements guarded by a marker: applied once,
 skipped if already present, skipped (with a console line) if the bundle no
 longer contains the expected code -- a gradio upgrade then simply runs
 unpatched instead of breaking. Re-applied automatically after a venv
 reinstall because the original signature is back.
 
-Browsers cache the asset by URL (the hashed filename does not change), so
-a page loaded before the patch keeps the old code until a hard reload.
+Browsers cache the asset by URL (the hashed filename does not change) and,
+with no Cache-Control from the server, treat it as fresh for a tenth of its
+age -- days, for a bundle installed months ago. A plain reload, even a server
+restart, then kept running the UNPATCHED copy (seen: the reconnect patch
+"did nothing" until Ctrl+F5). NoCachePatchedAssets makes browsers revalidate
+exactly the patched files: a 304 when nothing changed, the new code when it did.
 """
 
 import glob
 import os
+
+# basenames of bundles carrying a patch, served with Cache-Control: no-cache
+PATCHED_ASSETS = set()
 
 MARKER = "/*forge-patched:tree-lookup*/"
 
@@ -92,9 +106,21 @@ RECONNECT_PATCH = [
     ),
 ]
 
+STREAM_MARKER = "/*forge-patched:stream-reopen*/"
+
+STREAM_PATCH = [
+    (
+        "mark a broken event stream closed so the next event reopens it",
+        'a.onerror=async function(u){console.error(u),await Promise.all(Object.keys(e).map(l=>e[l]({msg:"broken_connection",message:ke})))}',
+        'a.onerror=async function(u){' + STREAM_MARKER + 'console.error(u),r.open=!1,await Promise.all(Object.keys(e).map(l=>e[l]({msg:"broken_connection",message:ke})))}',
+        1,
+    ),
+]
+
 # (bundle glob, marker, patches, message once patched)
 PATCH_SETS = [
     ("index-*.js", MARKER, TREE_LOOKUP_PATCH, "component-tree lookup memoised"),
+    ("index-*.js", STREAM_MARKER, STREAM_PATCH, "a broken event stream is reopened instead of wedging later events"),
     ("Blocks-*.js", RECONNECT_MARKER, RECONNECT_PATCH, "no page reload when a broken stream reconnects to the same server"),
 ]
 
@@ -133,8 +159,35 @@ def apply():
                 continue
             if r:
                 status = (r, os.path.basename(path))
+                PATCHED_ASSETS.add(status[1])
                 break
         if status is None:
             print(f"[frontend patch] signature for '{what}' not found in this gradio build; running unpatched")
         elif status[0] == "patched":
-            print(f"[frontend patch] {status[1]}: {what} (hard-reload the page once to pick it up)")
+            print(f"[frontend patch] {status[1]}: {what}")
+
+
+class NoCachePatchedAssets:
+    """Pure ASGI middleware: `Cache-Control: no-cache` on the patched bundles.
+
+    Pure ASGI rather than BaseHTTPMiddleware, which buffers and can break
+    streaming responses -- this one only touches the response-start headers
+    of /assets/<patched file> requests and passes everything else through.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "") if scope.get("type") == "http" else ""
+        if not (PATCHED_ASSETS and "/assets/" in path and path.rsplit("/", 1)[-1] in PATCHED_ASSETS):
+            return await self.app(scope, receive, send)
+
+        async def send_no_cache(message):
+            if message.get("type") == "http.response.start":
+                headers = [(k, v) for k, v in message.get("headers", []) if k.lower() != b"cache-control"]
+                headers.append((b"cache-control", b"no-cache"))
+                message = dict(message, headers=headers)
+            await send(message)
+
+        return await self.app(scope, receive, send_no_cache)
