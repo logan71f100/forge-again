@@ -55,7 +55,7 @@ diffusers==0.39.0
 # paired gr.Sliders (or a 6-native component) during the ControlNet port stage
 # gradio_rangeslider==0.0.8
 gradio_imageslider==0.0.20
-loadimg==0.1.2
+loadimg==0.5.0
 tqdm>=4.66.1
 peft==0.21.0
 pydantic==2.13.5
