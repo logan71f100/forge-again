@@ -35,7 +35,7 @@ protobuf==3.20.3   # security: clears CVE-2022-1941; capped <4 by open-clip-torc
 # never upgrades, so protobuf is no longer disturbed.
 onnxruntime==1.19.2
 psutil>=5.9.5
-pytorch_lightning==1.9.4
+pytorch_lightning==2.6.1
 resize-right==0.0.2
 safetensors>=0.8.0   # high-level safetensors.torch API unchanged; required by transformers 5.17+/diffusers 0.40+
 scikit-image>=0.24   # numpy-2 compatible build (0.21 was numpy-1 ABI)
